@@ -1,6 +1,6 @@
 import mascotWrong from "../../assets/mascot-wrong.png";
 
-export default function AnswerFlash({ phase, score = 0, feedback }) {
+export default function AnswerFlash({ phase, score = 0, feedback, onDismiss }) {
   if (!phase) {
     return null;
   }
@@ -47,6 +47,10 @@ export default function AnswerFlash({ phase, score = 0, feedback }) {
           </strong>
 
           {feedback && <p className="answer-flash__feedback">{feedback}</p>}
+
+          <button type="button" className="answer-flash__ok" onClick={onDismiss}>
+            OK
+          </button>
         </div>
 
         {!correct && (

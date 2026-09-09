@@ -6,7 +6,7 @@ import BadgeToast from "../gamification/components/BadgeToast";
 import { useGamification } from "../gamification/useGamification";
 import { computeSessionStats } from "../utils/analytics";
 import { QUEST_LENGTH } from "../questConfig";
-import explorerSprite from "../assets/mascot-correct.png";
+import { getCharacter } from "../characters";
 
 const QUESTION_SECONDS = 15;
 
@@ -20,6 +20,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
   const correctCount = gameState.attempts.filter((attempt) => attempt.correct).length;
   const progress = Math.min(correctCount / QUEST_LENGTH, 1);
   const sessionStats = computeSessionStats(gameState.attempts);
+  const character = getCharacter(gameState.characterId);
 
   const {
     progressPercent,
@@ -39,8 +40,15 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
 
   const isUntimed = question?.mode === "short_answer";
 
+  // The result popup (win/wrong, with the descriptive feedback) now stays up
+  // until the player clicks OK instead of auto-dismissing on a timer -- so
+  // the game clock for the *next* question (which has already loaded
+  // underneath it) must not tick while it's showing, or reading the
+  // explanation would silently burn through the next question's time limit.
+  const isPaused = Boolean(flashPhase);
+
   useEffect(() => {
-    if (!question || gameState.isLoading || gameState.gameComplete || isUntimed) {
+    if (!question || gameState.isLoading || gameState.gameComplete || isUntimed || isPaused) {
       return undefined;
     }
 
@@ -55,35 +63,41 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
     }, 1000);
 
     return () => clearInterval(intervalId);
-  }, [gameState.questionCount, gameState.isLoading, gameState.gameComplete, question, isUntimed]);
+  }, [gameState.questionCount, gameState.isLoading, gameState.gameComplete, question, isUntimed, isPaused]);
 
   useEffect(() => {
-    if (secondsLeft > 0 || gameState.isLoading || gameState.gameComplete || submittedRef.current || isUntimed) {
+    if (secondsLeft > 0 || gameState.isLoading || gameState.gameComplete || submittedRef.current || isUntimed || isPaused) {
       return;
     }
 
     submittedRef.current = true;
     onAnswer(null, true);
-  }, [secondsLeft, gameState.isLoading, gameState.gameComplete, onAnswer, isUntimed]);
+  }, [secondsLeft, gameState.isLoading, gameState.gameComplete, onAnswer, isUntimed, isPaused]);
 
   useEffect(() => {
     if (!gameState.lastResult) {
       return undefined;
     }
 
-    const timers = [];
+    // Just pick the initial phase here -- no auto-dismiss timer. Dismissal
+    // is driven by the player clicking OK (handleFlashAcknowledge below).
+    setFlashPhase(gameState.lastResult.correct ? "win" : "wrong");
+  }, [gameState.lastResult]);
 
-    if (gameState.lastResult.correct) {
-      setFlashPhase("win");
-      timers.push(setTimeout(() => setFlashPhase("xpboost"), 1400));
-      timers.push(setTimeout(() => setFlashPhase(null), 3000));
-    } else {
-      setFlashPhase("wrong");
-      timers.push(setTimeout(() => setFlashPhase(null), 2200));
+  useEffect(() => {
+    // "xpboost" is a short celebratory flourish with nothing left to read,
+    // so it's fine for it to auto-dismiss rather than need its own OK click.
+    if (flashPhase !== "xpboost") {
+      return undefined;
     }
 
-    return () => timers.forEach(clearTimeout);
-  }, [gameState.lastResult]);
+    const timerId = setTimeout(() => setFlashPhase(null), 1400);
+    return () => clearTimeout(timerId);
+  }, [flashPhase]);
+
+  function handleFlashAcknowledge() {
+    setFlashPhase((currentPhase) => (currentPhase === "win" ? "xpboost" : null));
+  }
 
   function chooseAnswer(answer) {
     if (gameState.isLoading || submittedRef.current) {
@@ -165,6 +179,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
         phase={flashPhase}
         score={gameState.totalXp}
         feedback={gameState.lastResult?.evaluation?.feedback ?? gameState.lastResult?.evaluation?.explanation}
+        onDismiss={handleFlashAcknowledge}
       />
 
       <BadgeToast badge={activeBadge} onClose={dismissBadge} />
@@ -193,7 +208,13 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
           ))}
         </div>
         <div className="pixel-explorer" style={{ "--journey-position": `${7 + progress * 79}%` }} aria-hidden="true">
-          <img className="pixel-explorer__sprite" src={explorerSprite} alt="" />
+          {character.spriteType === "image" ? (
+            <img className="pixel-explorer__sprite" src={character.spriteSrc} alt="" />
+          ) : (
+            <span className="pixel-explorer__sprite pixel-explorer__sprite--emoji">
+              {character.spriteValue}
+            </span>
+          )}
         </div>
         <div className={gameState.gameComplete ? "treasure-chest treasure-chest--open" : "treasure-chest"} aria-label={gameState.gameComplete ? "Opened treasure" : "Treasure ahead"}>
           <span className="treasure-chest__lid" />

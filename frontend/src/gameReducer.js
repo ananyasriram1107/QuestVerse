@@ -1,5 +1,6 @@
 export const initialGameState = {
   name: "",
+  characterId: null,
   courseId: null,
   courseTitle: null,
   mode: null,
@@ -24,9 +25,12 @@ export function gameReducer(state, action) {
       return {
         ...state,
         name: action.payload.name,
+        characterId: action.payload.characterId,
         courseId: action.payload.courseId,
         courseTitle: action.payload.courseTitle,
         mode: action.payload.mode,
+        totalXp: action.payload.totalXp ?? 0,
+        level: action.payload.level ?? 1,
         started: true,
         isLoading: true,
         error: null,

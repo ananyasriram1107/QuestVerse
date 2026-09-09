@@ -29,4 +29,11 @@ export const COURSES = [
     description: "Paradigms, typing systems & language trivia",
     icon: "</>",
   },
+  {
+    id: "custom",
+    title: "Upload Your Own",
+    short: "PDF",
+    description: "Turn your own notes or a chapter into an AI-written quiz",
+    icon: "📄",
+  },
 ];

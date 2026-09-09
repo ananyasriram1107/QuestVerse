@@ -37,4 +37,4 @@ def validate_llm_response(data: dict, expected_tier: int) -> bool:
         return False
     if data["correct_answer"] not in data["options"]:
         return False
-    return True
+    return True 

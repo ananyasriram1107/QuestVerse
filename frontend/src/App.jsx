@@ -1,14 +1,19 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import FrontPage from "./pages/Frontpage";
-import NameEntry from "./components/NameEntry";
+import CharacterSelect from "./components/CharacterSelect";
 import PlayScreen from "./components/PlayScreen";
 import ClickSound from "./components/ClickSound";
 import FullscreenToggle from "./components/FullscreenToggle";
+import AchievementsToggle from "./components/AchievementsToggle";
+import AchievementsPage from "./components/AchievementsPage";
+import OfflineToggle from "./components/OfflineToggle";
 import { getFirstQuestion, submitAnswer } from "./api";
 import { gameReducer, initialGameState } from "./gameReducer";
 import { QUEST_LENGTH } from "./questConfig";
 import { computeSessionStats } from "./utils/analytics";
 import { recordCourseSession } from "./utils/progressStore";
+import { loadCharacterProgress, saveCharacterProgress } from "./utils/characterStore";
+import { recordAnswer } from "./utils/achievementStore";
 import "./App.css";
 
 function WorldMotion() {
@@ -26,6 +31,7 @@ export default function App() {
   const [gameState, dispatch] = useReducer(gameReducer, initialGameState);
   const questionStartedAtRef = useRef(Date.now());
   const [session, setSession] = useState(null);
+  const [showAchievements, setShowAchievements] = useState(false);
   const progressRecordedRef = useRef(false);
 
   useEffect(() => {
@@ -41,6 +47,18 @@ export default function App() {
     }
   }, [gameState.gameComplete, gameState.courseId, gameState.attempts]);
 
+  // Keeps the active character's save file (XP/level) up to date as the
+  // player earns XP, not just at the end of a completed quest -- so
+  // progress isn't lost if they exit mid-quest.
+  useEffect(() => {
+    if (gameState.started && gameState.characterId) {
+      saveCharacterProgress(gameState.characterId, {
+        totalXp: gameState.totalXp,
+        level: gameState.level,
+      });
+    }
+  }, [gameState.started, gameState.characterId, gameState.totalXp, gameState.level]);
+
   function handleLaunchSession(config) {
     setSession(config);
   }
@@ -51,14 +69,20 @@ export default function App() {
     setSession(null);
   }
 
-  async function startGame(name) {
+  async function startGame(character) {
+    const saved = loadCharacterProgress(character.id);
+    saveCharacterProgress(character.id, { gamesPlayed: saved.gamesPlayed + 1 });
+
     dispatch({
       type: "START_GAME",
       payload: {
-        name,
+        name: character.label,
+        characterId: character.id,
         courseId: session?.courseId,
         courseTitle: session?.courseTitle,
         mode: session?.mode,
+        totalXp: saved.totalXp,
+        level: saved.level,
       },
     });
 
@@ -100,6 +124,11 @@ export default function App() {
 
     try {
       const result = await submitAnswer(payload);
+      recordAnswer({
+        mode: gameState.currentQuestion.mode,
+        correct: result.correct,
+        correctStreakAfter: result.correct_streak,
+      });
       dispatch({
         type: "ANSWER_RESULT",
         payload: {
@@ -121,12 +150,12 @@ export default function App() {
   if (!session) {
     content = <FrontPage onLaunchSession={handleLaunchSession} />;
   } else if (!gameState.started) {
-    // 2. Stage 3: Name Entry
+    // 2. Stage 3: Character Select
     content = (
       <>
         <WorldMotion />
-        <NameEntry
-          onStart={startGame}
+        <CharacterSelect
+          onSelect={startGame}
           loading={gameState.isLoading}
           onExit={handleExitToStart}
           courseTitle={session?.courseTitle}
@@ -147,7 +176,10 @@ export default function App() {
     <>
       <ClickSound />
       <FullscreenToggle />
+      <AchievementsToggle onClick={() => setShowAchievements(true)} />
+      <OfflineToggle />
       {content}
+      {showAchievements && <AchievementsPage onClose={() => setShowAchievements(false)} />}
     </>
   );
 }

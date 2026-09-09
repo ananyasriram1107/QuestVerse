@@ -11,11 +11,9 @@ from pydantic import BaseModel
 # resolves if the project root is on sys.path -- this makes it work no
 # matter whether uvicorn was launched from backend/ or the project root.
 #
-# This block MUST run before importing keyword_grader below: keyword_grader
-# now does `from ai import ollama_client` at its own top level (for the
-# natural-language feedback feature), so if sys.path isn't fixed up yet at
-# the moment Python executes that import, it blows up with
-# "ModuleNotFoundError: No module named 'ai'".
+# This block MUST run before the `from ai...` imports further down (the
+# Programming Languages question bank and short-answer grader both live in
+# ai/), otherwise it blows up with "ModuleNotFoundError: No module named 'ai'".
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
@@ -34,7 +32,7 @@ from course_content import (
 from ai.question_bank import MCQ_QUESTIONS as LANG_MCQ_QUESTIONS
 from ai.question_bank import SHORT_ANSWER_QUESTIONS as LANG_SHORT_ANSWER_QUESTIONS
 from ai.short_ans import grade_short_answer
-from pdf_course import PdfProcessingError, course_metadata, load_uploaded_courses, process_pdf_upload
+from custom_upload import GenerationFailedError, PdfHasNoTextError, generate_questions_from_pdf
 
 app = FastAPI()
 
@@ -65,15 +63,9 @@ QUESTIONS_BY_ID: dict[str, dict] = {}
 QUESTIONS_BY_COURSE_MODE: dict[tuple[str, str], list[dict]] = {}
 QUESTIONS_BY_COURSE_MODE_TIER: dict[tuple[str, str], dict[int, list[dict]]] = {}
 
-# Metadata (no question content) for every PDF-derived course uploaded so
-# far this run -- /courses/custom serves this straight to the front page.
-UPLOADED_COURSE_METADATA: list[dict] = []
-
-
 def register_questions(questions: list[dict]) -> None:
     """Folds a batch of questions into every in-memory index. Called once at
-    startup for the built-in banks + any already-uploaded PDF courses, and
-    again for each new PDF upload -- so a freshly generated course is
+    startup for the built-in banks -- so a freshly generated PDF course is
     playable immediately, with no restart required."""
     for q in questions:
         ALL_QUESTIONS.append(q)
@@ -93,12 +85,6 @@ register_questions(
     + LANG_MCQ_QUESTIONS
     + LANG_SHORT_ANSWER_QUESTIONS
 )
-
-# Re-register whatever PDF courses were uploaded (and persisted) in a
-# previous run, so they don't disappear every time the server restarts.
-for _course in load_uploaded_courses():
-    register_questions(_course["questions"])
-    UPLOADED_COURSE_METADATA.append(course_metadata(_course))
 
 DEFAULT_COURSE = "os"
 DEFAULT_MODE = "mcq"
@@ -137,6 +123,26 @@ def random_question_for(course_id: str, mode: str, tier: int, exclude_id: Option
     return random.choice(candidates)
 
 
+def register_custom_questions(questions: list[dict]) -> None:
+    """Replaces any previously-uploaded custom question set with a new one.
+
+    Unlike the static course banks, "custom" content is generated at
+    runtime, so these lookup dicts need to support being updated in place
+    rather than only being built once at import time.
+    """
+    for key in [k for k in QUESTIONS_BY_COURSE_MODE if k[0] == "custom"]:
+        for q in QUESTIONS_BY_COURSE_MODE[key]:
+            QUESTIONS_BY_ID.pop(str(q["id"]), None)
+        del QUESTIONS_BY_COURSE_MODE[key]
+        QUESTIONS_BY_COURSE_MODE_TIER.pop(key, None)
+
+    for q in questions:
+        QUESTIONS_BY_ID[str(q["id"])] = q
+        key = (q["courseId"], q["mode"])
+        QUESTIONS_BY_COURSE_MODE.setdefault(key, []).append(q)
+        QUESTIONS_BY_COURSE_MODE_TIER.setdefault(key, {}).setdefault(q["tier"], []).append(q)
+
+
 def grade(question: dict, answer: Optional[str]):
     """Returns (is_correct, evaluation). evaluation always carries enough for the UI to show a real review screen -- the right answer, the player's own answer, and an explanation/feedback sentence."""
     raw_answer = answer or ""  # timeouts submit null -- treat like an empty answer, not a crash
@@ -162,33 +168,6 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/courses/custom")
-def get_custom_courses():
-    """PDF-derived courses uploaded so far -- the front page merges these
-    into its static OS/DBMS/DSA/Programming Languages course grid."""
-    return UPLOADED_COURSE_METADATA
-
-
-@app.post("/courses/upload")
-async def upload_course_pdf(file: UploadFile = File(...), title: str = Form("Custom Upload")):
-    if file.content_type not in ("application/pdf", "application/x-pdf") and not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
-
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="That file is empty.")
-
-    try:
-        course = process_pdf_upload(file_bytes, title)
-    except PdfProcessingError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    register_questions(course["questions"])
-    metadata = course_metadata(course)
-    UPLOADED_COURSE_METADATA.append(metadata)
-    return metadata
-
-
 @app.get("/questions/all")
 def get_all_questions(tier: Optional[int] = None):
     """Debug-only: full question data including answers, for validating content."""
@@ -201,6 +180,37 @@ def get_all_questions(tier: Optional[int] = None):
 def get_first_question(courseId: str = DEFAULT_COURSE, mode: str = DEFAULT_MODE):
     q = random_question_for(courseId, mode, tier=1)
     return public_question(q)
+
+
+@app.post("/custom/generate")
+async def generate_custom_questions(
+    file: UploadFile = File(...),
+    mode: str = Form("mcq"),
+    count: int = Form(5),
+):
+    """Generates a fresh 'custom' course from an uploaded PDF via the local
+    Ollama model, then registers it so /question/first and /answer can serve
+    and grade it exactly like any other course -- no other endpoint changes
+    needed."""
+    if mode not in ("mcq", "short_answer"):
+        raise HTTPException(status_code=400, detail="mode must be 'mcq' or 'short_answer'")
+
+    safe_count = max(1, min(10, count))
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        questions = generate_questions_from_pdf(file_bytes, mode, safe_count)
+    except PdfHasNoTextError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except GenerationFailedError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+    register_custom_questions(questions)
+
+    return {"courseId": "custom", "mode": mode, "count": len(questions)}
 
 
 @app.post("/answer")

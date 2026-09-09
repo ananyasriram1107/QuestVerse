@@ -1,24 +1,21 @@
 """
 Grading for the OS/DBMS/DSA short-answer questions in course_content.py.
 
-Concept coverage -- WHICH key ideas the player actually mentioned -- is still
+Concept coverage -- WHICH key ideas the player actually mentioned -- is
 decided deterministically from keyword_clusters. That part has to stay
 trustworthy and demo-safe, and a small local LLM has no business being the
 judge of whether a fact is present in a paragraph; keyword/alias matching
 does that job reliably.
 
-What used to be computer-y ("Missing: Page Faults, CPU Drop") is now handed
-to Ollama to turn into a couple of natural, human sentences -- the same way
-a TA would talk you through what you got right and what you missed, using
-the question's model_answer as the ground truth so the feedback can't drift
-from the real explanation. If Ollama isn't running (or returns something we
-can't parse), a naturally-phrased fallback sentence is built instead, so the
-game never shows the player a raw list of concept labels.
+Feedback text ("computer-y" labels like "Missing: Page Faults, CPU Drop")
+used to get handed to a local Ollama model to turn into natural sentences.
+That made every short-answer submission wait on a real network call before
+the player saw any reaction -- several seconds if Ollama was running, or an
+8-second timeout if it wasn't. _fallback_feedback below is written by hand
+to read the same way a TA would talk you through it, grounded in the
+question's model_answer so it can't drift from the real explanation, and
+it's instant since there's no network call involved.
 """
-
-import json
-
-from ai import ollama_client
 
 
 def _join_naturally(items: list[str]) -> str:
@@ -53,36 +50,6 @@ def _fallback_feedback(user_answer: str, matched: list[str], missing: list[str],
     return f"That doesn't quite capture it yet. Here's what this one is really about: {model_answer}"
 
 
-_LLM_SYSTEM_PROMPT = """You are a friendly, encouraging computer science tutor giving feedback on a
-student's short-answer response. You are given the question, the model/reference answer, the
-student's own answer, which key concepts they covered, and which key concepts they missed.
-Write 2-3 short sentences of warm, natural, conversational feedback: acknowledge what they got
-right, and if anything is missing, explain it in plain human language grounded in the model
-answer -- never just list the missing concept names like a computer would, and never invent
-facts that aren't in the model answer.
-Return ONLY raw JSON, no markdown, matching exactly:
-{"feedback": "<your 2-3 sentence feedback>"}
-"""
-
-
-def _llm_feedback(question: dict, user_answer: str, matched: list[str], missing: list[str], correct: bool, model_answer: str):
-    prompt = (
-        f"Question: {question.get('prompt', '')}\n"
-        f"Model answer: {model_answer}\n"
-        f"Student's answer: {user_answer!r}\n"
-        f"Concepts the student covered: {matched or 'none'}\n"
-        f"Concepts the student missed: {missing or 'none'}\n"
-        f"Overall correct: {correct}\n"
-    )
-    try:
-        raw = ollama_client.generate(prompt, system=_LLM_SYSTEM_PROMPT)
-        parsed = json.loads(raw)
-        feedback = str(parsed["feedback"]).strip()
-        return feedback or None
-    except (ollama_client.OllamaUnavailable, json.JSONDecodeError, KeyError, ValueError, TypeError):
-        return None
-
-
 def grade_keyword_answer(question: dict, user_answer: str) -> dict:
     clusters = question.get("keyword_clusters", [])
     model_answer = question.get("model_answer", "")
@@ -102,17 +69,8 @@ def grade_keyword_answer(question: dict, user_answer: str) -> dict:
     accuracy = round(100 * len(matched) / total)
     correct = len(matched) >= threshold
 
-    if not user_answer or not user_answer.strip():
-        feedback = _fallback_feedback("", matched, missing, correct, model_answer)
-        graded_by = "deterministic"
-    else:
-        llm_text = _llm_feedback(question, user_answer, matched, missing, correct, model_answer)
-        if llm_text is not None:
-            feedback = llm_text
-            graded_by = "ollama"
-        else:
-            feedback = _fallback_feedback(user_answer, matched, missing, correct, model_answer)
-            graded_by = "deterministic"
+    feedback = _fallback_feedback(user_answer or "", matched, missing, correct, model_answer)
+    graded_by = "deterministic"
 
     return {
         "accuracy": accuracy,
