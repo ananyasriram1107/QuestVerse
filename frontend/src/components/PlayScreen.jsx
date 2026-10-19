@@ -5,16 +5,26 @@ import AnswerFlash from "../gamification/components/AnswerFlash";
 import BadgeToast from "../gamification/components/BadgeToast";
 import { useGamification } from "../gamification/useGamification";
 import { computeSessionStats } from "../utils/analytics";
-import { QUEST_LENGTH } from "../questConfig";
+import Dashboard from "./Dashboard";
 import { getCharacter } from "../characters";
 
 const QUESTION_SECONDS = 15;
 
-export default function PlayScreen({ gameState, onAnswer, onExit }) {
+export default function PlayScreen({ gameState, onAnswer, onExit, onPractice, onRequestHint, onLevelDone }) {
+  const QUEST_LENGTH = gameState.questLength;
   const [secondsLeft, setSecondsLeft] = useState(QUESTION_SECONDS);
   const [flashPhase, setFlashPhase] = useState(null);
   const [textAnswer, setTextAnswer] = useState("");
   const submittedRef = useRef(false);
+  // Companion hint bubble: idle | loading | ready | error. Per question; never touches scoring.
+  const [hintState, setHintState] = useState({ status: "idle", text: "", questionId: null });
+  const hintInFlightRef = useRef(null); // question id of the request in flight -- blocks rapid double clicks
+
+  // "Adjusting state during render" (see https://react.dev/learn/you-might-not-need-an-effect)
+  // instead of an effect that calls setState -- avoids the extra render pass
+  // that setState-in-effect causes for these per-question/per-result resets.
+  const [prevAttemptCount, setPrevAttemptCount] = useState(gameState.attemptCount);
+  const [prevLastResult, setPrevLastResult] = useState(gameState.lastResult);
 
   const question = gameState.currentQuestion;
   const correctCount = gameState.attempts.filter((attempt) => attempt.correct).length;
@@ -29,14 +39,55 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
     dismissBadge,
   } = useGamification(gameState);
 
-  useEffect(() => {
+  // Keyed on attemptCount (every submission), not question.id or solved count: a thin content pool can
+  // legitimately serve the same question twice in a row, and the
+  // submit-lock/timer must still reset for that next round.
+  if (prevAttemptCount !== gameState.attemptCount) {
+    setPrevAttemptCount(gameState.attemptCount);
     setSecondsLeft(QUESTION_SECONDS);
-    setTextAnswer("");
+    // Keep what the student typed after a miss so they can refine it; clear
+    // it once the question is actually solved and the next one unlocks.
+    if (gameState.lastResult?.question_solved) {
+      setTextAnswer("");
+    }
+  }
+
+  // A hint belongs to one question: moving on drops it (and any pause it caused).
+  if (hintState.questionId !== null && hintState.questionId !== question?.id) {
+    setHintState({ status: "idle", text: "", questionId: null });
+  }
+
+  // Ref mutation belongs in an effect, not render -- only the setState calls
+  // above are safe to run directly during render.
+  useEffect(() => {
     submittedRef.current = false;
-    // Keyed on questionCount, not question.id: a thin content pool can
-    // legitimately serve the same question twice in a row, and the
-    // submit-lock/timer must still reset for that next round.
-  }, [gameState.questionCount]);
+  }, [gameState.attemptCount, gameState.error]);
+
+  const hintVisible = hintState.status !== "idle" && hintState.questionId === question?.id;
+  // The countdown holds still (keeping its exact remaining seconds) only while the hint
+  // request is pending; it resumes the moment the hint or an error arrives.
+  const hintPausesTimer = hintVisible && hintState.status === "loading";
+
+  async function askForHint() {
+    if (!question || hintInFlightRef.current === question.id || hintState.status === "loading") return;
+    const questionId = question.id;
+    hintInFlightRef.current = questionId;
+    setHintState({ status: "loading", text: "", questionId });
+    try {
+      const text = await onRequestHint(questionId);
+      setHintState((prev) => (prev.questionId === questionId ? { status: "ready", text, questionId } : prev));
+    } catch (error) {
+      setHintState((prev) =>
+        prev.questionId === questionId ? { status: "error", text: error.message, questionId } : prev
+      );
+    } finally {
+      if (hintInFlightRef.current === questionId) hintInFlightRef.current = null;
+    }
+  }
+
+  function closeHint() {
+    setHintState({ status: "idle", text: "", questionId: null });
+  }
 
   const isUntimed = question?.mode === "short_answer";
 
@@ -45,7 +96,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
   // the game clock for the *next* question (which has already loaded
   // underneath it) must not tick while it's showing, or reading the
   // explanation would silently burn through the next question's time limit.
-  const isPaused = Boolean(flashPhase);
+  const isPaused = Boolean(flashPhase) || hintPausesTimer;
 
   useEffect(() => {
     if (!question || gameState.isLoading || gameState.gameComplete || isUntimed || isPaused) {
@@ -63,7 +114,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
     }, 1000);
 
     return () => clearInterval(intervalId);
-  }, [gameState.questionCount, gameState.isLoading, gameState.gameComplete, question, isUntimed, isPaused]);
+  }, [gameState.attemptCount, gameState.isLoading, gameState.gameComplete, question, isUntimed, isPaused]);
 
   useEffect(() => {
     if (secondsLeft > 0 || gameState.isLoading || gameState.gameComplete || submittedRef.current || isUntimed || isPaused) {
@@ -74,15 +125,14 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
     onAnswer(null, true);
   }, [secondsLeft, gameState.isLoading, gameState.gameComplete, onAnswer, isUntimed, isPaused]);
 
-  useEffect(() => {
-    if (!gameState.lastResult) {
-      return undefined;
+  // Just pick the initial phase here -- no auto-dismiss timer. Dismissal
+  // is driven by the player clicking OK (handleFlashAcknowledge below).
+  if (prevLastResult !== gameState.lastResult) {
+    setPrevLastResult(gameState.lastResult);
+    if (gameState.lastResult) {
+      setFlashPhase(gameState.lastResult.correct ? "win" : "wrong");
     }
-
-    // Just pick the initial phase here -- no auto-dismiss timer. Dismissal
-    // is driven by the player clicking OK (handleFlashAcknowledge below).
-    setFlashPhase(gameState.lastResult.correct ? "win" : "wrong");
-  }, [gameState.lastResult]);
+  }
 
   useEffect(() => {
     // "xpboost" is a short celebratory flourish with nothing left to read,
@@ -95,8 +145,19 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
     return () => clearTimeout(timerId);
   }, [flashPhase]);
 
+  // A level's final answer still gets its feedback popup (and XP flourish);
+  // once that has been dismissed the app moves on to the results screen.
+  useEffect(() => {
+    if (gameState.levelId && gameState.gameComplete && !flashPhase) {
+      onLevelDone?.();
+    }
+  }, [gameState.levelId, gameState.gameComplete, flashPhase, onLevelDone]);
+
+  // The XP flourish only plays when XP was actually awarded (a replayed level
+  // question earns none, and the backend says so).
   function handleFlashAcknowledge() {
-    setFlashPhase((currentPhase) => (currentPhase === "win" ? "xpboost" : null));
+    const earned = gameState.lastResult?.xp_earned ?? 0;
+    setFlashPhase((currentPhase) => (currentPhase === "win" && earned > 0 ? "xpboost" : null));
   }
 
   function chooseAnswer(answer) {
@@ -178,6 +239,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
       <AnswerFlash
         phase={flashPhase}
         score={gameState.totalXp}
+        xp={gameState.lastResult?.xp_earned}
         feedback={gameState.lastResult?.evaluation?.feedback ?? gameState.lastResult?.evaluation?.explanation}
         onDismiss={handleFlashAcknowledge}
       />
@@ -223,7 +285,9 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
         </div>
       </section>
 
-      {gameState.gameComplete ? (
+      {gameState.gameComplete && gameState.levelId ? (
+        <p className="level-finishing" role="status">Level cleared! Tallying your results…</p>
+      ) : gameState.gameComplete ? (
         <section className="quest-complete" aria-live="polite">
           <div className="pixel-confetti" aria-hidden="true">
             {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ "--confetti-index": index }} />)}
@@ -243,6 +307,10 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
               <dd>{sessionStats.longestStreak}</dd>
             </div>
             <div>
+              <dt>Retries</dt>
+              <dd>{sessionStats.totalAnswered - sessionStats.correctCount}</dd>
+            </div>
+            <div>
               <dt>Highest Tier</dt>
               <dd>{sessionStats.highestTier}</dd>
             </div>
@@ -251,6 +319,10 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
               <dd>{sessionStats.avgSpeedSeconds}s</dd>
             </div>
           </dl>
+
+          {gameState.sessionId && (
+            <Dashboard sessionId={gameState.sessionId} studentId={gameState.characterId} onPractice={onPractice} />
+          )}
 
           <button type="button" className="quest-complete__exit" onClick={onExit}>
             ◀ BACK TO START
@@ -262,6 +334,34 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
         </p>
 
         <h1>{question.prompt}</h1>
+
+        {onRequestHint && gameState.sessionId && (
+          <div className="hint-companion">
+            <button
+              type="button"
+              className="hint-button"
+              onClick={askForHint}
+              disabled={gameState.isLoading || (hintVisible && hintState.status === "loading")}
+            >
+              GET A HINT 💡
+            </button>
+            {hintVisible && (
+              <div className={`hint-bubble hint-bubble--${hintState.status}`} role="status" aria-live="polite">
+                <span className="hint-bubble__who" aria-hidden="true">
+                  {character.spriteType === "image" ? "🧙" : character.spriteValue}
+                </span>
+                <p>{hintState.status === "loading" ? "Your companion is thinking…" : hintState.text}</p>
+                <div className="hint-bubble__actions">
+                  {hintState.status !== "loading" && (
+                    <button type="button" onClick={closeHint}>
+                      GOT IT
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {question.mode === "short_answer" ? (
           <form className="short-answer-form" onSubmit={submitTextAnswer}>
@@ -282,6 +382,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
             </button>
           </form>
         ) : (
+          <div className="answer-options-wrap">
           <div className="answer-options">
             {(question.options || []).map((option) => (
               <button
@@ -293,6 +394,7 @@ export default function PlayScreen({ gameState, onAnswer, onExit }) {
                 {option}
               </button>
             ))}
+          </div>
           </div>
         )}
       </section>}

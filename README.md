@@ -42,3 +42,20 @@ Mastery & Learning Insights
 - 🛡️ Offline fallback for reliable demos
 
 Built for an 18-hour hackathon.
+## Running locally
+
+```
+# 1. Backend (from backend/). Creates/migrates backend/questverse.db on first start.
+./venv/Scripts/python.exe -m uvicorn main:app --port 8010
+
+# 2. Frontend (from frontend/). Talks to http://127.0.0.1:8010 via frontend/.env.development.
+npm run dev            # http://localhost:5173
+
+# Tests (from backend/)
+./venv/Scripts/python.exe test_engine.py
+./venv/Scripts/python.exe test_quest_flow.py
+```
+
+Port 8000 is often taken by other local APIs, which makes the map fail to load, so QuestVerse
+uses 8010. To use 8000 instead, free it and delete `frontend/.env.development` (or override
+`VITE_API_BASE_URL` in `frontend/.env.local`).

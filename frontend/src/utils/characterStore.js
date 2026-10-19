@@ -42,3 +42,14 @@ export function saveCharacterProgress(characterId, updates) {
   writeJson(CHARACTERS_KEY, all);
   return all[characterId];
 }
+
+// The character played most recently, with their saved XP/level -- what the
+// stage map shows as "the player". Null if nothing has been played yet.
+export function loadLastPlayedCharacter() {
+  const all = readJson(CHARACTERS_KEY, {});
+  const entries = Object.entries(all).filter(([, value]) => value?.lastPlayedAt);
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => String(b[1].lastPlayedAt).localeCompare(String(a[1].lastPlayedAt)));
+  const [characterId, value] = entries[0];
+  return { characterId, ...DEFAULT_PROGRESS, ...value };
+}

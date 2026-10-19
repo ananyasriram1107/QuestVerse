@@ -1,0 +1,364 @@
+
+> frontend@0.0.0 dev
+> vite
+
+[2m9:42:05 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m Re-optimizing dependencies because vite config has changed
+
+  [32m[1mVITE[22m v8.2.2[39m  [2mready in [0m[1m2465[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m10:01:49 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m10:01:49 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m10:02:03 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:02:03 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:02:23 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:02:23 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:02:29 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:02:29 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:03:33 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m10:03:33 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:14:19 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m10:14:19 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:14:19 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:14:19 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:14:35 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:14:35 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:22:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx[22m
+[2m10:22:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx[22m
+[2m10:22:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:22:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:22:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnexpected token. Did you mean `{'}'}` or `&rbrace;`?
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/components/PlayScreen.jsx:340:10 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m340 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m)[0m[38;5;249m}[0m
+ [38;5;240m    │[0m          │ 
+ [38;5;240m    │[0m          ╰─ 
+[38;5;246m─────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mC:/Users/Ananya/Desktop/questverse/frontend/src/components/PlayScreen.jsx[39m
+      at transformWithOxc (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:4103:19)
+      at TransformPluginContext.transform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:4174:26)
+      at EnvironmentPluginContainer.transform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:30932:51)
+      at async loadAndTransform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:20671:26)
+      at async viteTransformMiddleware (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:25205:20)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnexpected token. Did you mean `{'}'}` or `&rbrace;`?
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/components/PlayScreen.jsx:340:10 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m340 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m)[0m[38;5;249m}[0m
+ [38;5;240m    │[0m          │ 
+ [38;5;240m    │[0m          ╰─ 
+[38;5;246m─────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mC:/Users/Ananya/Desktop/questverse/frontend/src/components/PlayScreen.jsx[39m
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnexpected token. Did you mean `{'}'}` or `&rbrace;`?
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/components/PlayScreen.jsx:340:10 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m340 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m)[0m[38;5;249m}[0m
+ [38;5;240m    │[0m          │ 
+ [38;5;240m    │[0m          ╰─ 
+[38;5;246m─────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mC:/Users/Ananya/Desktop/questverse/frontend/src/components/PlayScreen.jsx[39m
+      at transformWithOxc (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:4103:19)
+      at TransformPluginContext.transform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:4174:26)
+      at EnvironmentPluginContainer.transform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:30932:51)
+      at async loadAndTransform (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:20671:26)
+      at async viteTransformMiddleware (file:///C:/Users/Ananya/Desktop/questverse/frontend/node_modules/vite/dist/node/chunks/node.js:25205:20)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/components/PlayScreen.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:22:14 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:22:24 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:22:26 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:22:27 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:23:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx[22m
+[2m10:25:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/CharacterSelect.jsx[22m
+[2m10:27:41 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:28:14 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:28:14 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/Frontpage.jsx[22m
+[2m10:29:41 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:29:41 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:29:41 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:30:15 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:30:15 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:30:15 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:49:40 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx[22m
+[2m10:49:49 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx[22m
+[2m10:49:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/pages/StageMap.jsx[22m
+[2m10:49:50 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/utils/stageStore.js (resolved id: C:/Users/Ananya/Desktop/questverse/frontend/src/utils/stageStore.js) in C:/Users/Ananya/Desktop/questverse/frontend/src/App.jsx. Does the file exist?
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/utils/stageStore.js (resolved id: C:/Users/Ananya/Desktop/questverse/frontend/src/utils/stageStore.js) in C:/Users/Ananya/Desktop/questverse/frontend/src/App.jsx. Does the file exist?
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/stageMap.js (resolved id: C:/Users/Ananya/Desktop/questverse/frontend/src/stageMap.js) in C:/Users/Ananya/Desktop/questverse/frontend/src/pages/StageMap.jsx. Does the file exist?
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/pages/StageMap.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:49:50 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/pages/StageMap.jsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m10:50:39 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:51:57 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:52:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:52:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/Frontpage.jsx[22m
+[2m10:52:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/gamification/components/AnswerFlash.jsx[22m
+[2m10:52:13 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:52:42 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m10:52:42 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/LevelResults.jsx[22m
+[2m10:52:42 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:52:53 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:53:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:53:41 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:55:37 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/PlayScreen.jsx[22m
+[2m10:55:37 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m10:55:37 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.css[22m
+[2m10:59:46 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Dashboard.jsx[22m
+[2m11:02:34 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:34 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:37 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:37 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:38 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:39 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:39 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:39 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:40 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:40 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:41 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:41 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:02:53 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:02:53 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:04:27 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:04:27 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:04:28 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:04:28 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:04:41 pm[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mTypeError[22m: Cannot read properties of undefined (reading 'forEach')
+[39m > computeLayout src/mapLayout.js:19:9
+    17 |    const nodes = [];
+    18 |  
+    19 |    stages.forEach((stage) => {
+       |           ^
+    20 |      const top = y;
+    21 |      const height = BAND_TOP + (stage.levels.length - 1) * NODE_GAP + BAND_BOTTOM + 6;
+ > src/pages/StageMap.jsx:47:39
+ > updateMemo node_modules/react-dom/cjs/react-dom-client.development.js:8795:18
+ > Object.useMemo node_modules/react-dom/cjs/react-dom-client.development.js:26484:17
+ > exports.useMemo node_modules/react/cjs/react.development.js:1251:33
+ > StageMap src/pages/StageMap.jsx:47:17
+ > Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+
+[2m11:04:41 pm[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mAn error occurred in the <StageMap> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+[2m11:05:24 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/components/PdfUploadStage.jsx, /src/components/Dashboard.jsx, /src/pages/StageMap.jsx, /src/components/LevelResults.jsx[22m
+[2m11:05:24 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m11:05:24 pm[22m [36m[1m[vite][22m[39m [32m.env.development changed, restarting server...[39m
+[2m11:05:24 pm[22m [36m[1m[vite][22m[39m server restarted.
+[2m7:37:56 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/pages/StageMap.jsx, /src/components/LevelResults.jsx, /src/components/Dashboard.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m7:37:56 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx, /src/pages/StageMap.jsx, /src/components/LevelResults.jsx, /src/components/Dashboard.jsx, /src/components/PdfUploadStage.jsx[22m
+[2m7:37:56 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m
+[2m7:38:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m7:38:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StageMap.jsx[22m
+[2m7:38:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/CharacterSelect.jsx[22m
+[2m7:38:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/CharacterSelect.jsx[22m
+[2m7:38:09 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.jsx[22m

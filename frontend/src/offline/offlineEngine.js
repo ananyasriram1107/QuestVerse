@@ -103,39 +103,165 @@ function levelFromXp(totalXp) {
   return Math.floor(Math.sqrt(totalXp / 50)) + 1;
 }
 
-export function getFirstQuestionOffline(courseId = DEFAULT_COURSE, mode = DEFAULT_MODE) {
+const QUEST_LENGTH = 5;
+
+// Offline mirror of backend/quest_session.py: one in-browser session that
+// only unlocks the next question once the current one is solved. (Offline
+// Mode is client-side by nature, so this is behavioural parity, not a
+// security boundary -- the real enforcement is on the backend.)
+let offlineSession = null;
+
+// The wrong options, decided from the question's real correct_answer.
+function incorrectOptions(question) {
+  const right = String(question.correct_answer).trim().toLowerCase();
+  return question.options.filter((o) => o.trim().toLowerCase() !== right);
+}
+
+// Exactly two wrong options go, and the correct answer plus at least one wrong
+// one must remain, so three or more wrong options must still be standing.
+function fiftyFiftyAvailable(question) {
+  const s = offlineSession;
+  if (!question || question.mode !== "mcq" || s.fiftyUsed) return false;
+  return incorrectOptions(question).filter((o) => !s.eliminated.includes(o)).length >= 3;
+}
+
+export function fiftyFiftyOffline(payload) {
+  const s = offlineSession;
+  if (!s || String(payload.question_id) !== s.currentId) {
+    throw new Error("That question is not currently unlocked");
+  }
+  const question = QUESTIONS_BY_ID.get(String(payload.question_id));
+  if (question.mode !== "mcq") throw new Error("50/50 is only available on multiple-choice questions");
+  if (s.fiftyUsed) throw new Error("You already used 50/50 on this question");
+  if (!fiftyFiftyAvailable(question)) {
+    throw new Error("50/50 is not available now: too few wrong options are left to remove two safely");
+  }
+  const candidates = incorrectOptions(question).filter((o) => !s.eliminated.includes(o));
+  for (let i = 0; i < 2; i += 1) {
+    s.eliminated.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
+  }
+  s.fiftyUsed = true;
+  s.hint = "50/50 used: two wrong options were removed. The correct answer is one of the options still showing.";
+  return { removed_count: 2, hint: s.hint, next_question: offlineView().next_question };
+}
+
+function offlineView(extra = {}) {
+  const s = offlineSession;
+  const current = s.currentId ? QUESTIONS_BY_ID.get(s.currentId) : null;
+  const question = current ? publicQuestion(current) : null;
+  if (question && s.eliminated.length) question.eliminated_options = [...s.eliminated];
+  if (question) question.fifty_fifty_available = fiftyFiftyAvailable(current);
+  return {
+    quest_length: QUEST_LENGTH,
+    solved_count: s.solved.length,
+    game_complete: s.solved.length >= QUEST_LENGTH,
+    tier: s.tier,
+    correct_streak: s.correctStreak,
+    wrong_streak: s.wrongStreak,
+    total_xp: s.startXp + s.xpEarned,
+    level: levelFromXp(s.startXp + s.xpEarned),
+    attempts: s.attempts,
+    next_question: question,
+    ...extra,
+  };
+}
+
+function offlineHint(question, attemptNo, evaluation, answer, struck) {
+  if (question.mode === "mcq") {
+    const pieces = [];
+    if (answer === null || answer === undefined) pieces.push("Time ran out.");
+    pieces.push(question.hint || "Reason from the core definition behind the question rather than what merely sounds familiar.");
+    if (struck) pieces.push("The option you chose is greyed out because it is not correct.");
+    return pieces.join(" ");
+  }
+  const matched = evaluation.matched_concepts || [];
+  const missing = evaluation.missing_concepts || [];
+  if (missing.length) {
+    const prefix = matched.length ? `You've covered ${matched.join(", ")}. ` : "";
+    return `${prefix}Not quite there yet -- think about: ${missing.slice(0, Math.max(1, attemptNo)).join(", ")}.`;
+  }
+  return "Not quite -- re-read the question and be more specific about the exact term or value it asks for.";
+}
+
+export function getFirstQuestionOffline(courseId = DEFAULT_COURSE, mode = DEFAULT_MODE, startXp = 0) {
   const q = randomQuestionFor(courseId, mode, 1);
-  return publicQuestion(q);
+  offlineSession = {
+    courseId: q.courseId, mode: q.mode, tier: 1, correctStreak: 0, wrongStreak: 0,
+    startXp: Math.max(0, Number(startXp) || 0), xpEarned: 0,
+    currentId: String(q.id), solved: [], attempts: [], attemptsOnCurrent: 0, eliminated: [], fiftyUsed: false, hint: null,
+    servedAt: Date.now(),
+  };
+  const view = offlineView();
+  const { next_question: firstQuestion, ...sessionFields } = view;
+  return { ...firstQuestion, ...sessionFields };
 }
 
 export function submitAnswerOffline(payload) {
+  const s = offlineSession;
+  if (!s || String(payload.question_id) !== s.currentId) {
+    throw new Error("That question is not currently unlocked");
+  }
   const question = QUESTIONS_BY_ID.get(String(payload.question_id));
   if (!question) {
     throw new Error("Unknown question_id");
   }
 
-  const safeTier = Math.max(1, Math.min(3, payload.tier));
   const [isCorrect, evaluation] = gradeOffline(question, payload.answer);
+  if (question.mode === "mcq" && payload.answer != null && s.eliminated.includes(payload.answer)) {
+    throw new Error("That option has been eliminated and can't be selected");
+  }
+  const optionsShown = question.mode === "mcq" ? question.options.length - s.eliminated.length : null;
+  const oldLevel = levelFromXp(s.startXp + s.xpEarned);
+  const result = nextState(s.tier, s.correctStreak, s.wrongStreak, isCorrect);
+  s.tier = result.tier;
+  s.correctStreak = result.correctStreak;
+  s.wrongStreak = result.wrongStreak;
+  s.attemptsOnCurrent += 1;
+  s.attempts.push({
+    question_id: String(question.id), correct: isCorrect, tier: question.tier,
+    attempt_no: s.attemptsOnCurrent, time_taken_ms: Date.now() - s.servedAt,
+    mode: question.mode, n_options: optionsShown,
+  });
 
-  const result = nextState(safeTier, payload.correct_streak, payload.wrong_streak, isCorrect);
-  const newTotalXp = payload.total_xp + result.xpEarned;
-  const oldLevel = levelFromXp(payload.total_xp);
-  const newLevel = levelFromXp(newTotalXp);
+  if (!isCorrect) {
+    // Exactly one option is greyed out: the wrong one the student picked.
+    // Anything more only comes from an explicit 50/50 request.
+    let struck = null;
+    if (question.mode === "mcq") {
+      struck = incorrectOptions(question).find((o) => o === payload.answer && !s.eliminated.includes(o)) ?? null;
+      if (struck) s.eliminated.push(struck);
+    }
+    const hint = offlineHint(question, s.attemptsOnCurrent, evaluation, payload.answer, struck);
+    return offlineView({
+      correct: false,
+      evaluation: { your_answer: payload.answer, feedback: hint, accuracy: evaluation.accuracy },
+      question_solved: false, xp_earned: 0, level_up: false, hint,
+    });
+  }
 
-  const nextQ = randomQuestionFor(question.courseId, question.mode, result.tier, question.id);
-
-  return {
-    correct: isCorrect,
-    evaluation,
-    xp_earned: result.xpEarned,
-    total_xp: newTotalXp,
-    tier: result.tier,
-    correct_streak: result.correctStreak,
-    wrong_streak: result.wrongStreak,
-    level: newLevel,
-    level_up: newLevel > oldLevel,
-    next_question: publicQuestion(nextQ),
-  };
+  let xp = 0;
+  if (!s.solved.includes(s.currentId)) {
+    s.solved.push(s.currentId);
+    xp = result.xpEarned;
+    s.xpEarned += xp;
+  }
+  s.eliminated = [];
+  s.fiftyUsed = false;
+  s.attemptsOnCurrent = 0;
+  s.servedAt = Date.now();
+  if (s.solved.length >= QUEST_LENGTH) {
+    s.currentId = null;
+  } else {
+    let next = randomQuestionFor(s.courseId, s.mode, s.tier, question.id);
+    for (let i = 0; i < 20 && s.solved.includes(String(next.id)); i += 1) {
+      next = randomQuestionFor(s.courseId, s.mode, s.tier, question.id);
+    }
+    s.currentId = String(next.id);
+  }
+  return offlineView({
+    correct: true, evaluation, question_solved: true, xp_earned: xp,
+    level_up: levelFromXp(s.startXp + s.xpEarned) > oldLevel, hint: null,
+  });
 }
 
 export function hasOfflineQuestion(questionId) {

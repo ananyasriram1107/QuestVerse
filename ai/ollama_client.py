@@ -67,6 +67,8 @@ def generate(
     model: str = OLLAMA_MODEL,
     timeout: float = DEFAULT_TIMEOUT_S,
     json_mode: bool = True,
+    options: dict | None = None,
+    keep_alive: str | None = None,
 ) -> str:
     """
     Calls Ollama's /api/generate with streaming off, returns the raw text
@@ -82,6 +84,10 @@ def generate(
         payload["system"] = system
     if json_mode:
         payload["format"] = "json"
+    if options:
+        payload["options"] = options  # e.g. num_predict / temperature / num_ctx
+    if keep_alive:
+        payload["keep_alive"] = keep_alive  # how long Ollama keeps the model in memory after this call
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -101,6 +107,17 @@ def generate(
         raise OllamaUnavailable(f"Cannot reach Ollama at {OLLAMA_HOST}: {e.reason}") from e
     except TimeoutError as e:
         raise OllamaUnavailable(f"Ollama timed out after {timeout}s") from e
+
+
+def warm_up(model: str = OLLAMA_MODEL, keep_alive: str = "30m", timeout: float = 120.0) -> bool:
+    """Loads the model into memory (Ollama unloads idle models after ~5 minutes, which is
+    what makes the first request after a pause take tens of seconds). Never raises."""
+    try:
+        generate("hi", model=model, timeout=timeout, json_mode=False, keep_alive=keep_alive,
+                 options={"num_predict": 1})
+        return True
+    except OllamaUnavailable:
+        return False
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import mascotWrong from "../../assets/mascot-wrong.png";
 
-export default function AnswerFlash({ phase, score = 0, feedback, onDismiss }) {
+export default function AnswerFlash({ phase, score = 0, feedback, xp = 10, onDismiss }) {
   if (!phase) {
     return null;
   }
@@ -17,7 +17,7 @@ export default function AnswerFlash({ phase, score = 0, feedback, onDismiss }) {
             <div className="xpboost-coins" aria-hidden="true">
               <i /><i /><i /><i /><i />
             </div>
-            <em>+10 XP</em>
+            <em>+{xp} XP</em>
           </div>
         </div>
       </div>

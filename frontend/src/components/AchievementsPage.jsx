@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ACHIEVEMENTS } from "../achievements";
 import { loadStats, loadUnlockedAchievements, unlockAchievement } from "../utils/achievementStore";
 import BadgeUnlockReveal from "./BadgeUnlockReveal";
@@ -16,13 +16,19 @@ export default function AchievementsPage({ onClose }) {
     setRevealing(achievement);
   }
 
-  return (
-    <div className="achievements-page">
-      <button type="button" className="exit-button" onClick={onClose}>
-        ◀ BACK
-      </button>
+  useEffect(() => {
+    const onKey = (event) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
+  return (
+    <div className="achievements-page" role="dialog" aria-modal="true" aria-label="Achievements">
       <div className="achievements-page__card">
+        <button type="button" className="achievements-page__back" onClick={onClose}>
+          ← Back
+        </button>
+
         <p className="eyebrow">Progress</p>
         <h1>Achievements</h1>
 

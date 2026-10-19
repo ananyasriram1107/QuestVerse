@@ -1,5 +1,6 @@
 import os
 import random
+import sqlite3
 import sys
 from typing import Optional
 
@@ -18,7 +19,8 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from engine import level_from_xp, next_state
+from engine import level_from_xp
+import ai_hint
 from keyword_grader import grade_keyword_answer
 from course_content import (
     DBMS_QUESTIONS,
@@ -32,9 +34,19 @@ from course_content import (
 from ai.question_bank import MCQ_QUESTIONS as LANG_MCQ_QUESTIONS
 from ai.question_bank import SHORT_ANSWER_QUESTIONS as LANG_SHORT_ANSWER_QUESTIONS
 from ai.short_ans import grade_short_answer
+import attempt_store
+from guess_analysis import analyze_attempts
+from quest_session import (
+    LOCK, QuestSession, SessionError, apply_answer, attempt_view, create_session,
+    apply_fifty_fifty, fifty_fifty_available, get_session, register_session, set_question_lookup,
+)
+from levels_config import COURSE_TITLES as LEVEL_COURSE_TITLES
+from progression import build_catalog, compute_progress, level_states, next_level_id, public_level, stars_for
+from topic_insights import recommend, topic_performance
 from custom_upload import GenerationFailedError, PdfHasNoTextError, generate_questions_from_pdf
 
 app = FastAPI()
+attempt_store.init_db()
 
 # Wide open for hackathon speed — tighten later if it ever matters
 app.add_middleware(
@@ -45,14 +57,34 @@ app.add_middleware(
 )
 
 
+class StartLevelRequest(BaseModel):
+    student_id: Optional[str] = None
+    resume_only: bool = False  # True when re-entering from a URL/refresh: resume, never start a new run
+
+
+class CompleteLevelRequest(BaseModel):
+    student_id: Optional[str] = None
+    session_id: str
+
+
+class HintRequest(BaseModel):
+    session_id: str
+    student_id: Optional[str] = None  # must match the student the session was started for
+    question_id: str
+
+
 class AnswerRequest(BaseModel):
+    session_id: str
+    student_id: Optional[str] = None  # must match the student the session was started for
     question_id: str
     answer: Optional[str] = None  # null on a timeout (see PlayScreen's onAnswer(null, true))
-    tier: int
-    correct_streak: int
-    wrong_streak: int
-    total_xp: int
-    mode: Optional[str] = None  # informational only -- grading always uses the stored question's real mode
+    # Legacy fields the client still sends. Tier, streaks and XP are now owned
+    # by the server-side session, so these are accepted but ignored.
+    tier: Optional[int] = None
+    correct_streak: Optional[int] = None
+    wrong_streak: Optional[int] = None
+    total_xp: Optional[int] = None
+    mode: Optional[str] = None
 
 
 # ---- Question bank: every course's content, combined and indexed ----
@@ -85,6 +117,17 @@ register_questions(
     + LANG_MCQ_QUESTIONS
     + LANG_SHORT_ANSWER_QUESTIONS
 )
+
+set_question_lookup(lambda qid: QUESTIONS_BY_ID.get(str(qid)))
+
+# Mirrors frontend/src/courses.js -- the only topic grouping the banks have.
+COURSE_TITLES = {
+    "os": "Operating Systems",
+    "dbms": "Database Systems",
+    "dsa": "Data Structures & Algorithms",
+    "lang": "Programming Languages",
+    "custom": "Upload Your Own",
+}
 
 DEFAULT_COURSE = "os"
 DEFAULT_MODE = "mcq"
@@ -165,7 +208,7 @@ def grade(question: dict, answer: Optional[str]):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "questverse"}
 
 
 @app.get("/questions/all")
@@ -176,10 +219,135 @@ def get_all_questions(tier: Optional[int] = None):
     return ALL_QUESTIONS
 
 
+def session_view(session: QuestSession) -> dict:
+    """Everything the client needs to render (or resume) the session. The
+    current question is sent in its public form -- never its answer."""
+    current = QUESTIONS_BY_ID.get(session.current_question_id) if session.current_question_id else None
+    question = None
+    if current is not None:
+        question = public_question(current)
+        if session.eliminated:
+            question["eliminated_options"] = list(session.eliminated)
+        question["fifty_fifty_available"] = fifty_fifty_available(session, current)
+    return {
+        "session_id": session.id,
+        "courseId": session.course_id,
+        "mode": session.mode,
+        "quest_length": session.quest_length,
+        "level_id": session.level_id,
+        "solved_count": len(session.solved),
+        "game_complete": session.complete,
+        "tier": session.tier,
+        "correct_streak": session.correct_streak,
+        "wrong_streak": session.wrong_streak,
+        "total_xp": session.total_xp,
+        "level": level_from_xp(session.total_xp),
+        "hint": session.hint,
+        "attempts": session.attempts,
+        "question": question,
+    }
+
+
+def pick_next_question(session: QuestSession):
+    def pick(tier: int, solved_ids: set):
+        if session.question_ids:  # level session: the next unsolved question of its fixed set
+            return next((QUESTIONS_BY_ID[i] for i in session.question_ids if i not in solved_ids), None)
+        # Never re-serve a solved question: prefer the target tier, then any
+        # unsolved question of this course/mode. quest_length is capped at the
+        # pool size when the session starts, so one always exists.
+        key = (session.course_id, session.mode)
+        pool = [q for q in QUESTIONS_BY_COURSE_MODE_TIER.get(key, {}).get(tier, []) if str(q["id"]) not in solved_ids]
+        if not pool:
+            pool = [q for q in QUESTIONS_BY_COURSE_MODE.get(key, []) if str(q["id"]) not in solved_ids]
+        return random.choice(pool) if pool else None
+    return pick
+
+
 @app.get("/question/first")
-def get_first_question(courseId: str = DEFAULT_COURSE, mode: str = DEFAULT_MODE):
+def get_first_question(courseId: str = DEFAULT_COURSE, mode: str = DEFAULT_MODE, start_xp: int = 0, student_id: str = "anonymous"):
+    """Starts a new quest session and unlocks its first question. The
+    response is the public question plus session fields, so existing
+    clients reading question fields keep working."""
     q = random_question_for(courseId, mode, tier=1)
-    return public_question(q)
+    try:
+        with LOCK:
+            pool_size = len(QUESTIONS_BY_COURSE_MODE.get((q["courseId"], q["mode"]), []))
+            session = create_session(q["courseId"], q["mode"], start_xp, attempt_store.clean_student_id(student_id), pool_size)
+            session.serve(str(q["id"]))
+            register_session(session)
+            view = session_view(session)
+    except SessionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+    return {**view["question"], **{k: v for k, v in view.items() if k not in ("question", "courseId", "mode")}}
+
+
+def http_error(e: SessionError) -> HTTPException:
+    return HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@app.get("/session/{session_id}")
+def get_session_state(session_id: str, student_id: str = "anonymous"):
+    """Lets a refreshed page (or a restarted backend) resume exactly where
+    the server says the student is -- current question, hint, attempt history."""
+    try:
+        with LOCK:
+            return session_view(get_session(session_id, attempt_store.clean_student_id(student_id)))
+    except SessionError as e:
+        raise http_error(e) from e
+
+
+@app.get("/dashboard/{session_id}")
+def get_dashboard(session_id: str, student_id: str = "anonymous"):
+    """Analysis for a quest, computed from the PERSISTED attempt log (not
+    from anything the client reports). Only valid, graded submissions are in
+    that log -- rejected requests never reach it."""
+    sid = attempt_store.clean_student_id(student_id)
+    try:
+        with LOCK:
+            session = get_session(session_id, sid)
+            state = session.to_state()
+    except SessionError as e:
+        raise http_error(e) from e
+
+    try:
+        rows = attempt_store.fetch_session_attempts(session_id)
+        history = attempt_store.fetch_student_attempts(sid) if sid != "anonymous" else rows
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail="Could not read your attempt history. Please try again.") from e
+
+    attempts = [attempt_view(r) for r in rows]
+    mode_of = lambda qid: (QUESTIONS_BY_ID.get(str(qid)) or {}).get("mode")
+    topics = topic_performance(history, mode_of)
+    available = lambda cid, m: (cid, m) in QUESTIONS_BY_COURSE_MODE
+    recs = recommend(topics, available, COURSE_TITLES, ["os", "dbms", "dsa", "lang"], session.course_id)
+
+    by_q: dict = {}
+    for a in attempts:
+        by_q.setdefault(a["question_id"], []).append(a)
+    most_retried = []
+    for qid, qa in by_q.items():
+        retries = len(qa) - 1 if any(x["correct"] for x in qa) else len(qa)
+        q = QUESTIONS_BY_ID.get(qid)
+        if retries > 0 and q:
+            most_retried.append({"question_id": qid, "prompt": q["prompt"], "retries": retries, "mode": q["mode"]})
+    most_retried.sort(key=lambda x: -x["retries"])
+
+    return {
+        "session_id": session_id,
+        "topic": session.course_id,
+        "topic_title": COURSE_TITLES.get(session.course_id, session.course_id),
+        "completion": {
+            "complete": session.complete,
+            "solved": len(state["solved"]),
+            "quest_length": session.quest_length,
+            "total_xp": session.total_xp,
+            "xp_earned": session.xp_earned,
+        },
+        "analysis": analyze_attempts(attempts),
+        "most_retried": most_retried[:3],
+        "topics": topics,
+        "recommendations": recs,
+    }
 
 
 @app.post("/custom/generate")
@@ -219,32 +387,330 @@ def submit_answer(payload: AnswerRequest):
     if question is None:
         raise HTTPException(status_code=404, detail="Unknown question_id")
 
-    safe_tier = max(1, min(3, payload.tier))   # clamp against bad/stale input
+    try:
+        with LOCK:
+            session = get_session(payload.session_id, attempt_store.clean_student_id(payload.student_id))
+            if session.complete:
+                raise SessionError(409, "This quest is already complete")
+            # Progression gate: only the currently unlocked question can be
+            # answered. Later questions (or already-solved ones) are rejected.
+            if str(payload.question_id) != session.current_question_id:
+                raise SessionError(409, "That question is not currently unlocked")
 
-    is_correct, evaluation = grade(question, payload.answer)
+            # An option that has been removed can't be submitted (a timeout,
+            # answer=None, is still fine). Rejected before grading, so it is
+            # not recorded as an attempt.
+            if payload.answer is not None and payload.answer in session.eliminated:
+                raise SessionError(409, "That option has been eliminated and can't be selected")
 
-    result = next_state(
-        tier=safe_tier,
-        correct_streak=payload.correct_streak,
-        wrong_streak=payload.wrong_streak,
-        correct=is_correct,
-    )
+            is_correct, evaluation = grade(question, payload.answer)
+            outcome = apply_answer(
+                session, question, payload.answer, is_correct, evaluation, pick_next_question(session)
+            )
 
-    new_total_xp = payload.total_xp + result["xp_earned"]
-    old_level = level_from_xp(payload.total_xp)
-    new_level = level_from_xp(new_total_xp)
+            if is_correct:
+                shown_evaluation = evaluation
+            else:
+                # Never reveal the answer on a miss: only the hint and the
+                # player's own answer go back.
+                shown_evaluation = {
+                    "your_answer": payload.answer,
+                    "feedback": outcome["hint"],
+                    "accuracy": evaluation.get("accuracy"),
+                    "matched_concepts": evaluation.get("matched_concepts"),
+                }
 
-    next_q = random_question_for(question["courseId"], question["mode"], result["tier"], exclude_id=question["id"])
+            view = session_view(session)
+    except SessionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
     return {
         "correct": is_correct,
-        "evaluation": evaluation,  # accuracy/feedback for short-answer; null for mcq
-        "xp_earned": result["xp_earned"],
-        "total_xp": new_total_xp,
-        "tier": result["tier"],
-        "correct_streak": result["correct_streak"],
-        "wrong_streak": result["wrong_streak"],
-        "level": new_level,
-        "level_up": new_level > old_level,
-        "next_question": public_question(next_q),
+        "evaluation": shown_evaluation,
+        "question_solved": outcome["question_solved"],
+        "xp_earned": outcome["xp_earned"],
+        "total_xp": view["total_xp"],
+        "tier": view["tier"],
+        "correct_streak": view["correct_streak"],
+        "wrong_streak": view["wrong_streak"],
+        "level": view["level"],
+        "level_up": outcome["level_up"],
+        "hint": outcome["hint"],
+        "solved_count": view["solved_count"],
+        "quest_length": view["quest_length"],
+        "level_id": view["level_id"],
+        "game_complete": view["game_complete"],
+        "attempts": view["attempts"],
+        # On a miss this is the SAME question (with any crossed-out options);
+        # on a solve it's the newly unlocked one; null when the quest is done.
+        "next_question": view["question"],
     }
+
+
+_HINTS_IN_FLIGHT: set = set()
+
+
+@app.on_event("startup")
+def warm_hint_model():
+    """Load the hint model in the background so the first hint isn't a cold start."""
+    import threading
+    threading.Thread(target=ai_hint.ollama_client.warm_up, daemon=True).start()
+
+
+@app.post("/hint/ai")
+def ai_hint_for_question(payload: HintRequest):
+    """Verbal hint from the local Ollama model for the session's current question.
+    Read-only: never touches XP, attempts, options or progression. The question
+    is looked up server-side so the correct answer can be screened out of the hint."""
+    question = QUESTIONS_BY_ID.get(str(payload.question_id))
+    if question is None:
+        raise HTTPException(status_code=404, detail="Unknown question_id")
+    try:
+        with LOCK:
+            session = get_session(payload.session_id, attempt_store.clean_student_id(payload.student_id))
+            if session.complete or str(payload.question_id) != session.current_question_id:
+                raise SessionError(409, "That question is not currently unlocked")
+    except SessionError as e:
+        raise http_error(e) from e
+    key = (payload.session_id, str(payload.question_id))
+    with LOCK:
+        busy = key in _HINTS_IN_FLIGHT
+        _HINTS_IN_FLIGHT.add(key)
+    if busy:
+        raise HTTPException(status_code=429, detail="Your companion is already thinking. Hold on a moment.")
+    try:
+        hint = ai_hint.generate_hint(question)
+    except ai_hint.HintError as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from e
+    finally:
+        with LOCK:
+            _HINTS_IN_FLIGHT.discard(key)
+    return {"hint": hint, "question_id": str(payload.question_id)}
+
+
+@app.post("/hint/fifty-fifty")
+def use_fifty_fifty(payload: HintRequest):
+    """Explicit 50/50 hint: removes exactly two wrong options from the current
+    multiple-choice question, once per question. Never touches the correct
+    answer, XP, attempts or progression."""
+    question = QUESTIONS_BY_ID.get(str(payload.question_id))
+    if question is None:
+        raise HTTPException(status_code=404, detail="Unknown question_id")
+    try:
+        with LOCK:
+            session = get_session(payload.session_id, attempt_store.clean_student_id(payload.student_id))
+            if session.complete or str(payload.question_id) != session.current_question_id:
+                raise SessionError(409, "That question is not currently unlocked")
+            removed = apply_fifty_fifty(session, question)
+            view = session_view(session)
+    except SessionError as e:
+        raise http_error(e) from e
+    return {
+        "removed_count": len(removed),
+        "hint": view["hint"],
+        "next_question": view["question"],
+    }
+
+
+# ===================================================================== levels
+# World -> Stage -> Level -> Quiz. The backend owns which levels exist, which are
+# open for a student, and who gets XP; the client only displays what it is told.
+
+# Levels are built from the built-in banks (uploaded "custom" quizzes stay free-play).
+CATALOG = build_catalog([q for q in ALL_QUESTIONS if q["courseId"] != "custom"])
+
+
+def require_student(raw: Optional[str]) -> str:
+    student_id = attempt_store.clean_student_id(raw)
+    if student_id == "anonymous":
+        raise HTTPException(status_code=400, detail="A valid student_id is required")
+    return student_id
+
+
+def student_progress_state(student_id: str):
+    """(completion rows, open level ids, level states) read from the database."""
+    try:
+        completions = attempt_store.fetch_completions(student_id)
+        open_ids = attempt_store.open_level_ids(student_id)
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail="Could not read your progress. Please try again.") from e
+    states = level_states(CATALOG, {c["level_id"] for c in completions}, open_ids)
+    return completions, open_ids, states
+
+
+def stage_name(stage_id: str) -> str:
+    return next((st["name"] for st in CATALOG["stages"] if st["id"] == stage_id), stage_id)
+
+
+@app.get("/stages")
+def get_stages():
+    """The world's structure -- stages and levels -- with no per-student state."""
+    return {
+        "world": CATALOG["world"],
+        "stages": [
+            {"id": st["id"], "name": st["name"], "description": st["description"], "theme": st["theme"],
+             "levels": [{k: v for k, v in public_level(lv, "", {}).items() if k not in ("state", "completions",
+                                                                                      "best_first_try_pct", "stars")}
+                        for lv in st["levels"]]}
+            for st in CATALOG["stages"]
+        ],
+    }
+
+
+@app.get("/progress/me")
+def get_progress(student_id: str = ""):
+    """The student's progression: every stage and level with its unlock state,
+    their XP, and where to continue. This is the single source of truth the
+    map renders."""
+    sid = require_student(student_id)
+    completions, open_ids, _ = student_progress_state(sid)
+    progress = compute_progress(CATALOG, completions, open_ids)
+    try:
+        total_xp = attempt_store.student_xp_total(sid)
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail="Could not read your progress. Please try again.") from e
+    progress.update({"student_id": sid, "total_xp": total_xp, "level": level_from_xp(total_xp)})
+    return progress
+
+
+@app.post("/levels/{level_id}/start")
+def start_level(level_id: str, payload: StartLevelRequest):
+    """Opens a level's quiz. Refused (403) while the level is locked. If the
+    student already has an unfinished run of this level it is RESUMED, so
+    re-entering never resets their attempts."""
+    level = CATALOG["levels"].get(level_id)
+    if level is None:
+        raise HTTPException(status_code=404, detail="Unknown level")
+    sid = require_student(payload.student_id)
+    try:
+        with LOCK:
+            _, _, states = student_progress_state(sid)
+            if states[level_id] == "locked":
+                raise HTTPException(status_code=403, detail="This level is locked. Complete the previous level first.")
+
+            try:
+                existing = attempt_store.find_open_level_session(sid, level_id)
+            except sqlite3.Error as e:
+                raise HTTPException(status_code=503, detail="Could not read your progress. Please try again.") from e
+
+            if existing is not None:
+                session = get_session(existing["id"], sid)
+            elif payload.resume_only:
+                raise HTTPException(status_code=409, detail="No unfinished run of this level to resume")
+            else:
+                formats = level["formats"]
+                session = create_session(
+                    level["course_id"], formats[0] if len(formats) == 1 else "mixed",
+                    attempt_store.student_xp_total(sid), sid, level["question_count"],
+                    level_id=level_id, question_ids=level["question_ids"], tier=level["start_tier"],
+                )
+                session.serve(level["question_ids"][0])
+                register_session(session)
+            view = session_view(session)
+    except SessionError as e:
+        raise http_error(e) from e
+    return {
+        **view["question"], **{k: v for k, v in view.items() if k not in ("question", "courseId", "mode")},
+        "question": view["question"],
+        "level_info": public_level(level, states[level_id], {}),
+        "resumed": existing is not None,
+    }
+
+
+def build_level_results(sid: str, level_id: str, session_id: Optional[str]) -> dict:
+    level = CATALOG["levels"].get(level_id)
+    if level is None:
+        raise HTTPException(status_code=404, detail="Unknown level")
+    completions, open_ids, states_after = student_progress_state(sid)
+    mine = [c for c in completions if c["level_id"] == level_id]
+    if session_id:
+        row = next((c for c in mine if c["session_id"] == session_id), None)
+    else:
+        row = mine[-1] if mine else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="No completed run of this level yet")
+
+    is_first = mine[0]["session_id"] == row["session_id"]
+    completed_after = {c["level_id"] for c in completions}
+    states_before = level_states(CATALOG, completed_after - ({level_id} if is_first else set()), open_ids)
+
+    newly_unlocked = []
+    if is_first:
+        for lv in CATALOG["ordered_levels"]:
+            if states_before[lv["id"]] == "locked" and states_after[lv["id"]] != "locked":
+                newly_unlocked.append({"level_id": lv["id"], "level_name": lv["name"], "stage_id": lv["stage_id"],
+                                       "stage_name": stage_name(lv["stage_id"]), "new_stage": lv["order"] == 0})
+
+    next_id = next_level_id(CATALOG, states_after)
+    next_level = None
+    if next_id:
+        nl = CATALOG["levels"][next_id]
+        next_level = {"id": nl["id"], "name": nl["name"], "stage_id": nl["stage_id"],
+                      "stage_name": stage_name(nl["stage_id"]), "state": states_after[next_id]}
+
+    total_xp = attempt_store.student_xp_total(sid)
+    earned = attempt_store.session_xp(row["session_id"])
+    questions = row["questions"]
+    return {
+        "level": {"id": level["id"], "name": level["name"], "stage_id": level["stage_id"],
+                  "stage_name": stage_name(level["stage_id"]), "question_count": level["question_count"]},
+        "session_id": row["session_id"],
+        "completed_at": row["completed_at"],
+        "first_completion": is_first,
+        "first_try_pct": row["first_try_pct"],
+        "stars": stars_for(row["first_try_pct"]),
+        "questions": questions,
+        "attempts": row["attempts"],
+        "retries": max(0, row["attempts"] - questions),
+        "xp": {
+            "earned_this_run": earned,
+            "total": total_xp,
+            "level": level_from_xp(total_xp),
+            # Replays earn nothing for questions whose XP was already granted.
+            "note": None if earned > 0 else "XP for this level was already earned on an earlier run, so this replay adds none.",
+        },
+        "newly_unlocked": newly_unlocked,
+        "next_level": next_level,
+        "all_completed": next_id is None,
+    }
+
+
+@app.post("/levels/{level_id}/complete")
+def complete_level(level_id: str, payload: CompleteLevelRequest):
+    """Confirms a finished run and returns its results. Completion is decided by
+    the server from the recorded attempts, never by the client; calling this
+    more than once is harmless (one completion per session, XP is a ledger)."""
+    if level_id not in CATALOG["levels"]:
+        raise HTTPException(status_code=404, detail="Unknown level")
+    sid = require_student(payload.student_id)
+    try:
+        with LOCK:
+            session = get_session(payload.session_id, sid)
+            if session.level_id != level_id:
+                raise SessionError(409, "That session belongs to a different level")
+            if not session.complete:
+                raise SessionError(409, f"Level not complete yet: {len(session.solved)} of {session.quest_length} questions solved")
+            rows = [a for a in attempt_store.fetch_session_attempts(session.id)]
+            firsts: dict = {}
+            for r in rows:
+                firsts.setdefault(r["question_id"], bool(r["is_correct"]))
+            attempt_store.ensure_completion({
+                "session_id": session.id, "student_id": sid, "level_id": level_id,
+                "questions": session.quest_length, "attempts": len(rows),
+                "first_try_pct": round(100 * sum(1 for ok in firsts.values() if ok) / session.quest_length, 1),
+            })
+            return build_level_results(sid, level_id, session.id)
+    except SessionError as e:
+        raise http_error(e) from e
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail="Could not record the completion. Please try again.") from e
+
+
+@app.get("/levels/{level_id}/results")
+def get_level_results(level_id: str, student_id: str = "", session_id: Optional[str] = None):
+    """Results of a completed run (the given session, or the latest)."""
+    sid = require_student(student_id)
+    try:
+        return build_level_results(sid, level_id, session_id)
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail="Could not read the results. Please try again.") from e

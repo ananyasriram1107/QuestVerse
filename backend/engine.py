@@ -32,3 +32,7 @@ def next_state(tier: int, correct_streak: int, wrong_streak: int, correct: bool)
 def level_from_xp(total_xp: int) -> int:
     """Simple RPG-style level curve: 0xp=L1, 50xp=L2, 200xp=L3, 450xp=L4..."""
     return int((total_xp / 50) ** 0.5) + 1
+
+# Number of questions that must be SOLVED to finish a quest. Mirrors
+# frontend/src/questConfig.js; the backend is the authority on completion.
+QUEST_LENGTH = 5

@@ -5,6 +5,13 @@ fallback -- there's no way to invent original questions from arbitrary
 uploaded text without an LLM, so it hard-requires Ollama to be running
 (see ai/ollama_client.py for setup).
 
+Text extraction tries pypdf's selectable-text layer first (fast, exact),
+and falls back to OCR (PyMuPDF renders each page to an image, Tesseract
+reads it) whenever that comes back empty or too short -- e.g. scanned
+lecture notes or a PDF made from photos. OCR needs the Tesseract binary
+installed on the host; if it isn't, extraction just degrades to "no text
+found" instead of crashing.
+
 generate_questions_from_pdf() is the one function main.py's /custom/generate
 route needs to call.
 """
@@ -20,20 +27,79 @@ from ai import ollama_client
 MAX_PDF_CHARS = 8000  # keeps the prompt small enough for a fast local model
 GENERATION_TIMEOUT_S = 150  # CPU-only local inference varies a lot under system load -- generous margin per attempt
 
+MIN_TEXT_CHARS = 40  # below this, pypdf's "text" is noise -- treat the page as scanned and OCR it
+OCR_MAX_PAGES = 15  # OCR is slow -- cap it so a huge scanned deck doesn't hang the request
+OCR_RENDER_DPI = 200  # enough resolution for Tesseract without huge images
+
 
 class PdfHasNoTextError(Exception):
-    """Raised when the PDF has no extractable text (e.g. a scanned image)."""
+    """Raised when the PDF has no extractable text (e.g. a scanned image)
+    and OCR either isn't available or couldn't read it either."""
 
 
 class GenerationFailedError(Exception):
     """Raised when Ollama is unreachable, or never returned usable questions."""
 
 
-def extract_pdf_text(file_bytes: bytes) -> str:
+def _extract_selectable_text(file_bytes: bytes) -> str:
+    """Text already embedded in the PDF (fast, exact) -- works for anything
+    that isn't a scanned image."""
     reader = PdfReader(io.BytesIO(file_bytes), strict=False)
     pages_text = [page.extract_text() or "" for page in reader.pages]
-    full_text = "\n".join(t for t in pages_text if t.strip())
-    return full_text.strip()[:MAX_PDF_CHARS]
+    return "\n".join(t for t in pages_text if t.strip()).strip()
+
+
+def _ocr_pdf_text(file_bytes: bytes) -> str:
+    """Rasterizes each page and runs Tesseract OCR over it -- the fallback
+    for scanned PDFs that have no selectable text layer at all. Requires the
+    Tesseract binary to be installed on the host (the pytesseract package is
+    just a wrapper around it); if it's missing, we degrade to "no text found"
+    rather than crashing the request.
+    """
+    try:
+        import pymupdf as fitz  # renders PDF pages to images with no external binary needed
+        import pytesseract
+    except ImportError:
+        return ""
+
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+    except Exception:
+        return ""
+
+    zoom = OCR_RENDER_DPI / 72  # PDF points are 72 per inch
+    matrix = fitz.Matrix(zoom, zoom)
+    ocr_pages = []
+
+    try:
+        for page in doc[:OCR_MAX_PAGES]:
+            pixmap = page.get_pixmap(matrix=matrix)
+            image_bytes = pixmap.tobytes("png")
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(image_bytes))
+            try:
+                page_text = pytesseract.image_to_string(image)
+            except pytesseract.TesseractNotFoundError:
+                return ""
+            if page_text.strip():
+                ocr_pages.append(page_text)
+    finally:
+        doc.close()
+
+    return "\n".join(ocr_pages).strip()
+
+
+def extract_pdf_text(file_bytes: bytes) -> str:
+    """Selectable text first (fast, exact); if the PDF turns out to be a
+    scanned image with little or no text layer, OCR it instead so scanned
+    notes/handouts still work."""
+    text = _extract_selectable_text(file_bytes)
+    if len(text) < MIN_TEXT_CHARS:
+        ocr_text = _ocr_pdf_text(file_bytes)
+        if len(ocr_text) > len(text):
+            text = ocr_text
+    return text[:MAX_PDF_CHARS]
 
 
 _MCQ_SYSTEM_PROMPT = """You are a quiz-writing assistant. You are given source material and must
@@ -107,7 +173,9 @@ def generate_questions_from_pdf(file_bytes: bytes, mode: str, count: int) -> lis
     source_text = extract_pdf_text(file_bytes)
     if not source_text:
         raise PdfHasNoTextError(
-            "This PDF doesn't seem to contain selectable text (it might be a scanned image) -- try a different file."
+            "Couldn't find any readable text in that PDF, even after trying OCR on it -- "
+            "it might be a low-quality scan, or the server may be missing the Tesseract OCR "
+            "engine. Try a clearer scan or a different file."
         )
 
     system_template = _MCQ_SYSTEM_PROMPT if mode == "mcq" else _SHORT_ANSWER_SYSTEM_PROMPT

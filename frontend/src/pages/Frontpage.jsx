@@ -1,28 +1,12 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import explorerSprite from "../assets/mascot-correct.png";
 import questBg from "../assets/pixel-quest-result-bg.png";
 import { COURSES } from "../courses";
 import PdfUploadStage from "../components/PdfUploadStage";
+import { MODES } from "../modes";
 
-const MODES = [
-  {
-    id: "mcq",
-    title: "Multiple Choice",
-    description: "Choose the correct answer from four options.",
-    icon: "✓",
-    tag: "QUICK",
-  },
-  {
-    id: "short_answer",
-    title: "Short Answer",
-    description: "Explain the concept in your own words.",
-    icon: "✎",
-    tag: "CONCEPT",
-  },
-];
-
-export default function FrontPage({ onLaunchSession }) {
-  const [stage, setStage] = useState("start");
+export default function FrontPage({ onLaunchSession, onOpenMap, onBackToMap, initialStage = "start" }) {
+  const [stage, setStage] = useState(initialStage);
   const [selectedCourse, setSelectedCourse] = useState(null);
 
   const selectCourse = (course) => {
@@ -71,7 +55,7 @@ export default function FrontPage({ onLaunchSession }) {
 
             <button
               className="pixel-start"
-              onClick={() => setStage("courses")}
+              onClick={() => (onOpenMap ? onOpenMap() : setStage("courses"))}
             >
               START QUEST
               <span>▶</span>
@@ -105,7 +89,7 @@ export default function FrontPage({ onLaunchSession }) {
 
               <button
                 className="pixel-back"
-                onClick={() => setStage("start")}
+                onClick={() => (onBackToMap ? onBackToMap() : setStage("start"))}
               >
                 ◀ BACK
               </button>

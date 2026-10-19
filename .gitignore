@@ -5,3 +5,4 @@ backend/__pycache__/
 backend/venv/
 backend/uploaded_courses.json
 ai/__pycache__/
+backend/questverse.db*
