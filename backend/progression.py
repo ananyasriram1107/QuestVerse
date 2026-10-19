@@ -20,27 +20,48 @@ Rules
      it; merely being open or having been viewed changes nothing.
 """
 
+import re
 from typing import Optional
 
 from levels_config import (
-    COMPLETION_REQUIREMENT, COURSE_TITLES, REWARD_DESCRIPTION, STAGES, STAR_THRESHOLDS, WORLD, build_levels,
+    COMPLETION_REQUIREMENT, COURSE_TITLES, MIN_LEVEL_QUESTIONS, REWARD_DESCRIPTION, STAGES, STAR_THRESHOLDS, WORLD,
+    build_levels,
 )
 
 TIER_WORDS = {1: "easy", 2: "medium", 3: "hard"}
 MODE_WORDS = {"mcq": "multiple-choice", "short_answer": "short-answer"}
 
 
+def _prompt_key(q: dict) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", str(q["prompt"]).lower())).strip()
+
+
 def resolve_question_ids(level: dict, all_questions: list) -> list:
-    """The level's fixed question set, as ids, in a stable order."""
+    """The level's fixed question set, as ids: each pool's slice in order, no question
+    (by id or by identical wording) twice, easiest tier first, capped at max_questions."""
     sel = level["selector"]
-    pool = [q for q in all_questions
-            if q["courseId"] == level["course_id"] and q["mode"] in sel["modes"] and q["tier"] in sel["tiers"]]
-    pool.sort(key=lambda q: (q["tier"], sel["modes"].index(q["mode"]), str(q["id"])))
-    return [str(q["id"]) for q in pool[: sel["max_questions"]]]
+    chosen, seen_ids, seen_prompts = [], set(), set()
+    for index, pool in enumerate(sel["pools"]):
+        candidates = sorted(
+            (q for q in all_questions
+             if q["courseId"] == level["course_id"] and q["mode"] == pool["mode"] and q["tier"] == pool["tier"]),
+            key=lambda q: str(q["id"]),
+        )
+        taken = 0
+        for q in candidates:
+            if taken >= pool["count"] or len(chosen) >= sel["max_questions"]:
+                break
+            if str(q["id"]) in seen_ids or _prompt_key(q) in seen_prompts:
+                continue
+            seen_ids.add(str(q["id"]))
+            seen_prompts.add(_prompt_key(q))
+            chosen.append((q["tier"], index, str(q["id"])))
+            taken += 1
+    return [qid for _, _, qid in sorted(chosen)]
 
 
 def _describe(level: dict, questions: list) -> str:
-    modes = sorted({q["mode"] for q in questions}, key=lambda m: level["selector"]["modes"].index(m))
+    modes = list(dict.fromkeys(q["mode"] for q in questions))
     tiers = sorted({q["tier"] for q in questions})
     fmt = " and ".join(MODE_WORDS.get(m, m) for m in modes)
     diff = " to ".join(dict.fromkeys(TIER_WORDS[t] for t in (tiers[0], tiers[-1])))
@@ -64,7 +85,9 @@ def build_catalog(all_questions: list) -> dict:
             "name": level["name"],
             "description": _describe(level, questions),
             "question_ids": ids,
+            "selector": level["selector"],
             "question_count": len(ids),
+            "meets_minimum": len(ids) >= MIN_LEVEL_QUESTIONS,   # False => the level must be topped up before it can start
             "formats": sorted({q["mode"] for q in questions}),
             "start_tier": min(q["tier"] for q in questions),
             "completion_requirement": COMPLETION_REQUIREMENT,

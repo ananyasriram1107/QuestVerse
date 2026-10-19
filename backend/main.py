@@ -1,7 +1,9 @@
+import logging
 import os
 import random
 import sqlite3
 import sys
+import time
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -21,6 +23,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from engine import level_from_xp
 import ai_hint
+import level_fill
 from keyword_grader import grade_keyword_answer
 from course_content import (
     DBMS_QUESTIONS,
@@ -35,7 +38,7 @@ from ai.question_bank import MCQ_QUESTIONS as LANG_MCQ_QUESTIONS
 from ai.question_bank import SHORT_ANSWER_QUESTIONS as LANG_SHORT_ANSWER_QUESTIONS
 from ai.short_ans import grade_short_answer
 import attempt_store
-from guess_analysis import analyze_attempts
+from guess_analysis import incomplete_result, analyze_attempts
 from quest_session import (
     LOCK, QuestSession, SessionError, apply_answer, attempt_view, create_session,
     apply_fifty_fifty, fifty_fifty_available, get_session, register_session, set_question_lookup,
@@ -45,6 +48,7 @@ from progression import build_catalog, compute_progress, level_states, next_leve
 from topic_insights import recommend, topic_performance
 from custom_upload import GenerationFailedError, PdfHasNoTextError, generate_questions_from_pdf
 
+log = logging.getLogger(__name__)
 app = FastAPI()
 attempt_store.init_db()
 
@@ -343,7 +347,10 @@ def get_dashboard(session_id: str, student_id: str = "anonymous"):
             "total_xp": session.total_xp,
             "xp_earned": session.xp_earned,
         },
-        "analysis": analyze_attempts(attempts),
+        "analysis": analyze_attempts(attempts) if session.complete else incomplete_result(),
+        # Same analysis over every saved quest of this hero (quests stay separate inside it),
+        # used when a single quest is too short to say anything.
+        "analysis_overall": analyze_attempts([attempt_view(r) for r in history]) if sid != "anonymous" else None,
         "most_retried": most_retried[:3],
         "topics": topics,
         "recommendations": recs,
@@ -478,6 +485,8 @@ def ai_hint_for_question(payload: HintRequest):
         _HINTS_IN_FLIGHT.add(key)
     if busy:
         raise HTTPException(status_code=429, detail="Your companion is already thinking. Hold on a moment.")
+    started = time.monotonic()
+    hint = None
     try:
         hint = ai_hint.generate_hint(question)
     except ai_hint.HintError as e:
@@ -485,6 +494,15 @@ def ai_hint_for_question(payload: HintRequest):
     finally:
         with LOCK:
             _HINTS_IN_FLIGHT.discard(key)
+        # Evidence for the guesswork analysis: the client timer is paused for this whole
+        # wait, so the server logs its own measurement of it (hint received or not).
+        try:
+            attempt_store.record_hint_event(
+                session_id=payload.session_id, student_id=session.student_id, question_id=str(payload.question_id),
+                duration_ms=int((time.monotonic() - started) * 1000), ok=hint is not None,
+            )
+        except sqlite3.Error:
+            log.exception("could not log hint event")
     return {"hint": hint, "question_id": str(payload.question_id)}
 
 
@@ -517,7 +535,41 @@ def use_fifty_fifty(payload: HintRequest):
 # open for a student, and who gets XP; the client only displays what it is told.
 
 # Levels are built from the built-in banks (uploaded "custom" quizzes stay free-play).
-CATALOG = build_catalog([q for q in ALL_QUESTIONS if q["courseId"] != "custom"])
+CATALOG: dict = {}
+
+
+def rebuild_catalog() -> None:
+    """(Re)builds the stage/level catalog from the question banks, in place so every
+    reference to CATALOG sees the change (used again after a level is topped up)."""
+    CATALOG.clear()
+    CATALOG.update(build_catalog([q for q in ALL_QUESTIONS if q["courseId"] != "custom"]))
+
+
+# Questions generated earlier to top a level up are part of the bank from the start.
+register_questions([q for q in level_fill.load_generated() if str(q["id"]) not in QUESTIONS_BY_ID])
+rebuild_catalog()
+
+
+def ensure_level_ready(level_id: str) -> dict:
+    """The level, guaranteed to have MIN_LEVEL_QUESTIONS unique questions -- generating the
+    missing ones with the local model if needed. Raises 503 (and starts nothing) otherwise."""
+    level = CATALOG["levels"][level_id]
+    if level["meets_minimum"]:
+        return level
+    with level_fill.FILL_LOCK:
+        level = CATALOG["levels"][level_id]          # another request may have filled it while we waited
+        if not level["meets_minimum"]:
+            try:
+                fresh = level_fill.top_up(level, ALL_QUESTIONS)
+            except level_fill.LevelFillError as e:
+                raise HTTPException(status_code=503, detail=e.message) from e
+            with LOCK:
+                register_questions(fresh)
+                rebuild_catalog()
+            level = CATALOG["levels"][level_id]
+    if not level["meets_minimum"]:
+        raise HTTPException(status_code=503, detail="This level doesn't have enough questions yet. Please try again later.")
+    return level
 
 
 def require_student(raw: Optional[str]) -> str:
@@ -582,6 +634,13 @@ def start_level(level_id: str, payload: StartLevelRequest):
     if level is None:
         raise HTTPException(status_code=404, detail="Unknown level")
     sid = require_student(payload.student_id)
+    _, _, early_states = student_progress_state(sid)
+    if early_states[level_id] == "locked":
+        raise HTTPException(status_code=403, detail="This level is locked. Complete the previous level first.")
+    if not payload.resume_only:
+        # Slow (may call the local model), so it runs before taking the global lock. A level
+        # that cannot reach the minimum refuses to start rather than starting short.
+        level = ensure_level_ready(level_id)
     try:
         with LOCK:
             _, _, states = student_progress_state(sid)

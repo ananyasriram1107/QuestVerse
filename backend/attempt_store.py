@@ -35,6 +35,9 @@ DB_PATH = os.environ.get(
 )
 MAX_ANSWER_CHARS = 2000
 _STUDENT_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# Level runs saved before the 5-question minimum have fewer questions than a level may
+# now have; they are not resumed (see find_open_level_session) and their XP stays recorded.
+MIN_RESUMABLE_QUESTIONS = 5
 
 # Ordered migrations: index + 1 == the user_version it brings the DB to.
 # Statements are idempotent (IF NOT EXISTS) so adopting a v0 database that
@@ -117,6 +120,29 @@ MIGRATIONS = [
         first_try_pct REAL   NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_completions_student ON level_completions (student_id, level_id);
+    """,
+    # v5: guesswork-detection evidence. `hint_events` logs every AI hint request
+    # (server-measured duration, whether it produced a hint). `attempt_no` is NULL
+    # until an attempt consumes the event: that attempt's response time then
+    # excludes the hint wait. On `attempts`: `hint_used` = an AI hint had been
+    # received for this question before the attempt, `hint_wait_ms` = hint time
+    # subtracted from its response time, `timing_valid` = 0 when the timer
+    # restarted mid-question (server restart / reload), so the time is not trusted.
+    """
+    CREATE TABLE IF NOT EXISTS hint_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id  TEXT    NOT NULL,
+        student_id  TEXT    NOT NULL,
+        question_id TEXT    NOT NULL,
+        requested_at TEXT   NOT NULL,
+        duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+        ok          INTEGER NOT NULL CHECK (ok IN (0, 1)),
+        attempt_no  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_hint_events_q ON hint_events (session_id, question_id);
+    ALTER TABLE attempts ADD COLUMN hint_used INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN hint_wait_ms INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE attempts ADD COLUMN timing_valid INTEGER NOT NULL DEFAULT 1;
     """,
 ]
 
@@ -210,7 +236,7 @@ def find_open_level_session(student_id: str, level_id: str) -> Optional[dict]:
     finally:
         conn.close()
     for row in rows:
-        if len(json.loads(row["solved_json"])) < row["quest_length"]:
+        if row["quest_length"] >= MIN_RESUMABLE_QUESTIONS and len(json.loads(row["solved_json"])) < row["quest_length"]:
             return load_session(row["id"])
     return None
 
@@ -224,7 +250,8 @@ def open_level_ids(student_id: str) -> set:
         ).fetchall()
     finally:
         conn.close()
-    return {r["level_id"] for r in rows if len(json.loads(r["solved_json"])) < r["quest_length"]}
+    return {r["level_id"] for r in rows
+            if r["quest_length"] >= MIN_RESUMABLE_QUESTIONS and len(json.loads(r["solved_json"])) < r["quest_length"]}
 
 
 # ------------------------------------------------------------ XP ledger / levels
@@ -295,6 +322,9 @@ def record_attempt(
     attempt_no: int,
     response_time_ms: int,
     options_shown: Optional[int] = None,
+    hint_used: bool = False,
+    hint_wait_ms: int = 0,
+    timing_valid: bool = True,
     session_state: Optional[dict] = None,
     xp_award: Optional[dict] = None,
     completion: Optional[dict] = None,
@@ -310,9 +340,16 @@ def record_attempt(
         with conn:
             conn.execute(
                 "INSERT INTO attempts (student_id, session_id, question_id, topic, selected_answer, "
-                "is_correct, attempt_no, response_time_ms, submitted_at, options_shown) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "is_correct, attempt_no, response_time_ms, submitted_at, options_shown, hint_used, hint_wait_ms, "
+                "timing_valid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (student_id, session_id, question_id, topic, answer, int(is_correct),
-                 attempt_no, max(0, int(response_time_ms)), _now(), options_shown),
+                 attempt_no, max(0, int(response_time_ms)), _now(), options_shown,
+                 int(hint_used), max(0, int(hint_wait_ms)), int(timing_valid)),
+            )
+            # The hint time just excluded from this attempt must not be excluded again.
+            conn.execute(
+                "UPDATE hint_events SET attempt_no = ? WHERE session_id = ? AND question_id = ? AND attempt_no IS NULL",
+                (attempt_no, session_id, question_id),
             )
             if session_state is not None:
                 _save_session(conn, session_state)
@@ -333,6 +370,36 @@ def record_attempt(
                 )
     finally:
         conn.close()
+
+
+def record_hint_event(*, session_id: str, student_id: str, question_id: str, duration_ms: int, ok: bool) -> None:
+    """Logs one AI hint request. Duration is measured by the server around the
+    Ollama call, never reported by the client."""
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO hint_events (session_id, student_id, question_id, requested_at, duration_ms, ok) "
+                "VALUES (?,?,?,?,?,?)",
+                (session_id, student_id, question_id, _now(), max(0, int(duration_ms)), int(ok)),
+            )
+    finally:
+        conn.close()
+
+
+def pending_hint_info(session_id: str, question_id: str) -> tuple:
+    """(hint wait in ms not yet excluded from any attempt, whether a hint was received
+    for this question). Both are 0/False if the question never had a hint request."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN attempt_no IS NULL THEN duration_ms END), 0) AS wait, "
+            "COALESCE(MAX(ok), 0) AS used FROM hint_events WHERE session_id = ? AND question_id = ?",
+            (session_id, question_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["wait"]), bool(row["used"])
 
 
 def fetch_session_attempts(session_id: str) -> list:

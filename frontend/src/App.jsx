@@ -4,6 +4,7 @@ import StageMap from "./pages/StageMap";
 import CharacterSelect from "./components/CharacterSelect";
 import PlayScreen from "./components/PlayScreen";
 import LevelResults from "./components/LevelResults";
+import ReviewResults from "./components/ReviewResults";
 import ClickSound from "./components/ClickSound";
 import FullscreenToggle from "./components/FullscreenToggle";
 import AchievementsToggle from "./components/AchievementsToggle";
@@ -144,7 +145,7 @@ export default function App() {
 
   // Screens that need a hero send you to pick one first.
   useEffect(() => {
-    if (!student && !session && ["map", "play", "results"].includes(route.name)) {
+    if (!student && !session && ["map", "play", "results", "review"].includes(route.name)) {
       navigate({ name: "hero" }, { replace: true });
     }
   }, [student, session, route.name]);
@@ -473,7 +474,23 @@ export default function App() {
               sessionId={route.sessionId}
               studentId={student}
               onContinue={() => navigate({ name: "map" })}
+              onReview={(reviewSessionId) => navigate({ name: "review", levelId: route.levelId, sessionId: reviewSessionId })}
               onPractice={handlePractice}
+            />
+          </>
+        );
+        break;
+
+      case "review":
+        content = student && (
+          <>
+            <WorldMotion />
+            <ReviewResults
+              key={`${route.levelId}:${route.sessionId}`}
+              levelId={route.levelId}
+              sessionId={route.sessionId}
+              studentId={student}
+              onBack={() => navigate({ name: "results", levelId: route.levelId, sessionId: route.sessionId })}
             />
           </>
         );

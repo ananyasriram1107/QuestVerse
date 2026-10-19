@@ -23,6 +23,7 @@ from typing import Callable, Optional
 
 import attempt_store
 from engine import QUEST_LENGTH, level_from_xp, next_state
+from levels_config import MIN_LEVEL_QUESTIONS
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +67,12 @@ def attempt_view(row: dict) -> dict:
         # Options that were still selectable at that attempt (a 50/50 lowers
         # this), falling back to the full option count for older rows.
         "n_options": (row.get("options_shown") or len(q["options"])) if q and q["mode"] == "mcq" else None,
+        # Evidence for guesswork detection: which quest/topic, whether an AI hint had
+        # been received, and whether the recorded time can be trusted.
+        "session_id": row.get("session_id"),
+        "topic": row.get("topic"),
+        "hint_used": bool(row.get("hint_used", 0)),
+        "timing_valid": bool(row.get("timing_valid", 1)),
     }
 
 
@@ -96,6 +103,7 @@ class QuestSession:
         self.hint: Optional[str] = None
         self.fifty_fifty_used = False   # explicit 50/50 hint, once per question
         self.served_at = time.time()
+        self.timing_valid = True   # False after a reload mid-question: the timer restarted, so the time is unreliable
         self.touched_at = time.time()
 
     @property
@@ -114,6 +122,7 @@ class QuestSession:
         self.hint = None
         self.fifty_fifty_used = False
         self.served_at = time.time()
+        self.timing_valid = True
 
     def to_state(self) -> dict:
         return {
@@ -146,7 +155,8 @@ class QuestSession:
         s = cls(state["topic"], state["mode"], state["start_xp"], state["student_id"], state["quest_length"],
                 level_id=state.get("level_id"), question_ids=state.get("question_ids"))
         s.id = state["id"]
-        s.restore(state, time.time())  # response time restarts from the reload
+        s.restore(state, time.time())  # response time restarts from the reload...
+        s.timing_valid = False         # ...so the next answer's time is not trusted by the analysis
         s.attempts = [attempt_view(r) for r in attempt_store.fetch_session_attempts(s.id)]
         return s
 
@@ -163,6 +173,11 @@ def _purge_expired() -> None:
 
 def create_session(course_id: str, mode: str, start_xp: int, student_id: str = "anonymous", quest_length: int = QUEST_LENGTH,
                    level_id: Optional[str] = None, question_ids: Optional[list] = None, tier: int = 1) -> QuestSession:
+    if level_id is not None:
+        # Server-side guarantee, independent of the client: a level quiz never starts short or with repeats.
+        ids = [str(i) for i in (question_ids or [])]
+        if len(set(ids)) != len(ids) or len(ids) < MIN_LEVEL_QUESTIONS:
+            raise SessionError(503, f"This level needs at least {MIN_LEVEL_QUESTIONS} different questions and is not ready yet.")
     with LOCK:
         _purge_expired()
         return QuestSession(course_id, mode, start_xp, student_id, quest_length, level_id, question_ids, tier)
@@ -293,8 +308,16 @@ def apply_answer(session: QuestSession, question: dict, answer: Optional[str], i
 
     # Response time = server-measured ms from when this question (or the
     # retry after a miss) was shown until this submission arrived.
-    time_taken_ms = int((time.time() - session.served_at) * 1000)
+    # AI hint generation pauses the player's timer, so that wait is excluded.
+    try:
+        hint_wait_ms, hint_used = attempt_store.pending_hint_info(session.id, str(question["id"]))
+    except sqlite3.Error:
+        log.exception("could not read hint events; recording the attempt without them")
+        hint_wait_ms, hint_used = 0, False
+    timing_valid = session.timing_valid
+    time_taken_ms = max(0, int((time.time() - session.served_at) * 1000) - hint_wait_ms)
     session.served_at = time.time()
+    session.timing_valid = True  # a retry starts a fresh, trustworthy clock
     session.attempts_on_current += 1
     attempt_no = session.attempts_on_current
 
@@ -340,6 +363,10 @@ def apply_answer(session: QuestSession, question: dict, answer: Optional[str], i
         "time_taken_ms": time_taken_ms,
         "mode": question["mode"],
         "n_options": options_shown,
+        "session_id": session.id,
+        "topic": session.course_id,
+        "hint_used": hint_used,
+        "timing_valid": timing_valid,
     }
 
     # Level bookkeeping rides in the same transaction as the attempt itself.
@@ -370,16 +397,21 @@ def apply_answer(session: QuestSession, question: dict, answer: Optional[str], i
             attempt_no=attempt_no,
             response_time_ms=time_taken_ms,
             options_shown=options_shown,
+            hint_used=hint_used,
+            hint_wait_ms=hint_wait_ms,
+            timing_valid=timing_valid,
             session_state=session.to_state(),
             xp_award=xp_award,
             completion=completion,
         )
     except sqlite3.IntegrityError as e:
         session.restore(before, before_served_at)
+        session.timing_valid = timing_valid
         log.warning("duplicate attempt rejected for session %s question %s", session.id, question["id"])
         raise SessionError(409, "That attempt was already recorded") from e
     except sqlite3.Error as e:
         session.restore(before, before_served_at)
+        session.timing_valid = timing_valid
         log.exception("failed to persist attempt")
         raise SessionError(503, "Could not save your answer. Please try again.") from e
 

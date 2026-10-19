@@ -1,20 +1,6 @@
 import { useEffect, useState } from "react";
 import { getDashboard } from "../api";
-
-const RISK_COPY = {
-  low: {
-    label: "Low",
-    text: "Your first-try answers look like knowledge, not luck.",
-  },
-  moderate: {
-    label: "Moderate",
-    text: "Some of your first tries look like they could have been educated guesses. Worth slowing down on the ones you weren't sure about.",
-  },
-  high: {
-    label: "High",
-    text: "Your answer pattern is similar to what random picking would produce. That often just means the topic is new - it isn't a judgement about you.",
-  },
-};
+import GuessingPattern from "./GuessingPattern";
 
 const MODE_LABEL = { mcq: "multiple choice", short_answer: "short answer" };
 
@@ -55,8 +41,6 @@ export default function Dashboard({ sessionId, studentId, onPractice }) {
   const { completion, analysis, most_retried: mostRetried, topics, recommendations } = state.data;
   const ok = analysis.status === "ok";
   const m = analysis.metrics;
-  const risk = ok ? analysis.risk : null;
-  const chance = ok ? analysis.chance_baseline : null;
 
   return (
     <section className="dashboard" aria-label="Quest report">
@@ -98,46 +82,7 @@ export default function Dashboard({ sessionId, studentId, onPractice }) {
         </div>
       </div>
 
-      <div className="dash-panel">
-        <h3>
-          Guessing-pattern indicator
-          {risk && <span className={`dash-badge dash-badge--${risk.level}`}>{RISK_COPY[risk.level].label}</span>}
-        </h3>
-        {ok ? (
-          <>
-            <p>{RISK_COPY[risk.level].text}</p>
-            {chance.applicable && (
-              <p className="dash-help">
-                On multiple-choice first tries you got {chance.observed_correct} right; random picking would be expected to
-                get about {chance.expected_correct_by_guessing}.
-              </p>
-            )}
-            <p className="dash-help">
-              This is an estimate from answer patterns, not a verdict. Repeated mistakes are usually a knowledge gap, and
-              quick answers on their own never raise this indicator.
-            </p>
-            <details>
-              <summary>How this was worked out</summary>
-              <ul className="dash-list">
-                {risk.signals.map((signal) => (
-                  <li key={signal.id}>
-                    <strong>{signal.points > 0 ? `+${signal.points}` : "0"}</strong> {signal.label}
-                    <small> ({signal.rule})</small>
-                  </li>
-                ))}
-              </ul>
-              <p className="dash-help">
-                Score {risk.score} of {risk.max_score}: 0-1 low, 2-3 moderate, 4+ high (high also needs two different signals).
-              </p>
-              {analysis.limitations.map((line) => (
-                <p className="dash-help" key={line}>• {line}</p>
-              ))}
-            </details>
-          </>
-        ) : (
-          <p className="dash-note">{analysis.reason} It appears once enough questions have been answered.</p>
-        )}
-      </div>
+      <GuessingPattern analysis={analysis} overall={state.data.analysis_overall} />
 
       <div className="dash-panel">
         <h3>Topic-wise performance</h3>

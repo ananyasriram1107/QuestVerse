@@ -3,7 +3,7 @@ import { getLevelResults } from "../api";
 
 // Shown after a level is finished. Every number comes from the backend's
 // record of the run (GET /levels/{id}/results) -- nothing is computed here.
-export default function LevelResults({ levelId, sessionId, studentId, onContinue }) {
+export default function LevelResults({ levelId, sessionId, studentId, onContinue, onReview }) {
   const [load, setLoad] = useState({ status: "loading", data: null, error: null });
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -56,6 +56,7 @@ export default function LevelResults({ levelId, sessionId, studentId, onContinue
       <section className="level-results__card">
         <h1 className="level-results__title">LEVEL COMPLETE!</h1>
         <h2 className="level-results__level">{r.level.name}</h2>
+        <p className="level-results__count">{r.questions} questions</p>
 
         <div className="level-results__stars" role="img" aria-label={`${r.stars} of 3 stars`}>
           {[1, 2, 3].map((n) => (
@@ -97,6 +98,12 @@ export default function LevelResults({ levelId, sessionId, studentId, onContinue
         <button type="button" className="level-results__continue" onClick={onContinue} autoFocus>
           {r.all_completed ? "Back to the Map" : "Continue Adventure"} <span aria-hidden="true">→</span>
         </button>
+
+        {onReview && (
+          <button type="button" className="level-results__review" onClick={() => onReview(r.session_id)}>
+            Review Results
+          </button>
+        )}
       </section>
     </main>
   );

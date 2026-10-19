@@ -1997,3 +1997,44 @@ form button:hover:not(:disabled) {
   font-weight: 800;
   text-align: center;
 }
+
+/* ---- Guessing pattern (compact read-out) ---- */
+.guess-pattern {
+  margin: 16px 0 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #ffffff14;
+  color: #fff;
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.45;
+  text-align: left;
+  text-shadow: none;
+}
+
+.guess-pattern__title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 6px; color: #fff5a4; font-size: 0.85rem; letter-spacing: 0.05em; text-transform: uppercase; }
+.guess-pattern p { margin: 0 0 6px; }
+.guess-pattern__headline { font-size: 1.05rem; font-weight: 800; }
+.guess-pattern__text, .guess-pattern__next { font-size: 0.92rem; font-weight: 500; }
+.guess-pattern small { color: #ffffffa6; font-size: 0.72rem; }
+.dash-badge--insufficient_data { background: #d8cfc0; }
+
+.review-results .level-results__level { margin-bottom: 4px; }
+.review-results__title { margin: 0; color: #ffe765; font-family: Impact, "Arial Black", system-ui, sans-serif; font-size: clamp(1.8rem, 5vw, 2.6rem); text-shadow: 3px 3px 0 #1f1108; }
+.review-results .guess-pattern { margin-top: 20px; }
+
+.level-results__review {
+  display: block;
+  margin: 16px auto 0;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  color: #fff5a4;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.level-results__review:hover { color: #fff; }
+
+.level-results__count { margin: 4px 0 0; color: #fff5a4; font-size: 1rem; font-weight: 700; }

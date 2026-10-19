@@ -11,6 +11,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 
 from fastapi import HTTPException
 
@@ -21,7 +22,9 @@ attempt_store.DB_PATH = os.path.join(_tmpdir, "test.db")
 attempt_store.init_db()
 
 import main  # noqa: E402  (must come after DB_PATH is redirected)
+import progression  # noqa: E402
 import quest_session  # noqa: E402
+import level_fill  # noqa: E402
 from guess_analysis import analyze_attempts  # noqa: E402
 from topic_insights import recommend, topic_performance  # noqa: E402
 
@@ -597,10 +600,12 @@ def test_level_quiz_uses_the_levels_own_fixed_question_set():
     expected = main.CATALOG["levels"]["grove-os"]["question_ids"]
     r = start_lvl(s, "grove-os")
     assert r["level_id"] == "grove-os" and r["quest_length"] == len(expected) and r["id"] == expected[0]
-    seen = [r["id"]]
-    res = submit(r["session_id"], s, r["id"], right_of(r["id"]))
-    seen.append(res["next_question"]["id"])
-    assert seen == expected and all(main.QUESTIONS_BY_ID[q]["courseId"] == "os" for q in seen)
+    seen, qid = [], r["id"]
+    while qid:
+        seen.append(qid)
+        res = submit(r["session_id"], s, qid, right_answer(qid))
+        qid = res["next_question"]["id"] if res["next_question"] else None
+    assert seen == expected and len(seen) >= 5 and all(main.QUESTIONS_BY_ID[q]["courseId"] == "os" for q in seen)
 
 
 def test_wrong_answer_does_not_complete_a_level_and_complete_endpoint_refuses():
@@ -609,7 +614,7 @@ def test_wrong_answer_does_not_complete_a_level_and_complete_endpoint_refuses():
     sid, qid = r["session_id"], r["id"]
     submit(sid, s, qid, wrongs_of(qid)[0])
     assert complete_lvl(s, "grove-os", sid) == 409, "not finished yet"
-    submit(sid, s, qid, right_of(qid))                       # first of two questions solved
+    submit(sid, s, qid, right_of(qid))                       # first of five questions solved
     assert complete_lvl(s, "grove-os", sid) == 409
     assert level_state(s, "grove-os") == "in_progress" and level_state(s, "grove-dbms") == "locked"
 
@@ -622,7 +627,7 @@ def test_completing_a_level_unlocks_the_next_and_persists():
     quest_session.SESSIONS.clear()                           # restart: everything comes from the database
     p = main.get_progress(s)
     assert p["current_level_id"] == "grove-dbms" and p["totals"]["levels_completed"] == 1
-    assert p["total_xp"] == 20, "two tier-1 questions at 10 XP each"
+    assert p["total_xp"] > 0, "XP was awarded for the solved questions"
     assert isinstance(start_lvl(s, "grove-dbms"), dict), "the unlocked level can now be started"
 
 
@@ -641,8 +646,10 @@ def test_results_report_xp_stars_unlocks_and_the_next_level():
     s = new_student()
     sid, _ = solve_level(s, "grove-os", misses_first=1)
     res = main.get_level_results("grove-os", s, sid)
-    assert res["first_completion"] and res["xp"]["earned_this_run"] == 20 and res["xp"]["total"] == 20
-    assert res["first_try_pct"] == 50.0 and res["stars"] == 2 and res["retries"] == 1 and res["attempts"] == 3
+    assert res["first_completion"] and res["xp"]["earned_this_run"] > 0
+    assert res["xp"]["total"] == res["xp"]["earned_this_run"]
+    assert res["questions"] == 5 and res["first_try_pct"] == 80.0 and res["stars"] == 3
+    assert res["retries"] == 1 and res["attempts"] == 6
     assert [u["level_id"] for u in res["newly_unlocked"]] == ["grove-dbms"]
     assert res["next_level"]["id"] == "grove-dbms" and res["all_completed"] is False
     assert main.get_level_results("grove-os", s)["session_id"] == sid, "latest run when no session is given"
@@ -660,10 +667,11 @@ def test_repeated_completion_and_replays_never_duplicate_xp():
     again = complete_lvl(s, "grove-os", sid)
     assert first == again or (first["xp"], first["session_id"]) == (again["xp"], again["session_id"])
     assert len(attempt_store.fetch_completions(s)) == 1, "one completion row per run, however often it is confirmed"
-    assert main.get_progress(s)["total_xp"] == 20
+    xp = main.get_progress(s)["total_xp"]
+    assert xp > 0
     sid2, last2 = solve_level(s, "grove-os")                 # replay a completed level
-    assert last2["total_xp"] == 20 and last2["xp_earned"] == 0
-    assert main.get_progress(s)["total_xp"] == 20, "replay earns nothing"
+    assert last2["total_xp"] == xp and last2["xp_earned"] == 0
+    assert main.get_progress(s)["total_xp"] == xp, "replay earns nothing"
     res = main.get_level_results("grove-os", s, sid2)
     assert res["first_completion"] is False and res["xp"]["earned_this_run"] == 0 and res["newly_unlocked"] == []
     assert len(attempt_store.fetch_completions(s)) == 2
@@ -674,13 +682,17 @@ def test_abandoning_and_restarting_a_level_cannot_farm_xp():
     s = new_student()
     r = start_lvl(s, "grove-os")
     submit(r["session_id"], s, r["id"], right_of(r["id"]))   # earns the first question's XP, then quits
-    assert main.get_progress(s)["total_xp"] == 10
+    first_xp = main.get_progress(s)["total_xp"]
+    assert first_xp > 0
     again = start_lvl(s, "grove-os")
     assert again["resumed"] is True and again["session_id"] == r["session_id"] and again["solved_count"] == 1
     assert again["id"] != r["id"], "resumes at the next unsolved question, attempts intact"
     assert start_lvl(s, "grove-os", resume_only=True)["session_id"] == r["session_id"]
-    solve_other = submit(again["session_id"], s, again["id"], right_of(again["id"]))
-    assert solve_other["game_complete"] and main.get_progress(s)["total_xp"] == 20
+    res, qid = None, again["id"]
+    while qid:
+        res = submit(again["session_id"], s, qid, right_answer(qid))
+        qid = res["next_question"]["id"] if res["next_question"] else None
+    assert res["game_complete"] and main.get_progress(s)["total_xp"] > first_xp
     assert start_lvl(s, "grove-os", resume_only=True) == 409, "nothing left to resume once complete"
 
 
@@ -735,6 +747,427 @@ def test_migrations_create_and_upgrade_schema():
         assert attempt_store.xp_already_awarded("a", "grove-os", "q") is False, "v4 tables exist"
     finally:
         attempt_store.DB_PATH = original
+
+
+# ------------------------------------------------- guesswork detection (evidence + rules)
+
+def _a(q, n, ok, ms, hint=False, session="s1", mode="mcq", k=4, topic=None, valid=True):
+    return {"question_id": q, "attempt_no": n, "correct": ok, "time_taken_ms": ms, "mode": mode,
+            "n_options": k if mode == "mcq" else None, "session_id": session, "topic": topic,
+            "hint_used": hint, "timing_valid": valid}
+
+
+def _signal(res, sid):
+    return next(s for s in res["risk"]["signals"] if s["id"] == sid)
+
+
+def test_consistently_accurate_answers_are_low_risk():
+    res = analyze_attempts([_a(f"q{i}", 1, True, 5000) for i in range(6)])
+    assert res["status"] == "ok" and res["risk"]["level"] == "low"
+    assert res["summary"]["level"] == "low" and "thoughtful" in res["summary"]["observation"]
+
+
+def test_fast_repeated_incorrect_first_attempts_raise_risk_with_matching_explanation():
+    atts = []
+    for i in range(5):
+        atts += [_a(f"q{i}", 1, False, 600), _a(f"q{i}", 2, False, 500), _a(f"q{i}", 3, True, 500)]
+    res = analyze_attempts(atts)
+    assert res["risk"]["level"] == "high"
+    assert _signal(res, "repeated_rapid_incorrect")["points"] == 2
+    assert _signal(res, "consistently_rapid_first_answers")["points"] == 1
+    assert "very quickly" in res["summary"]["observation"] and "read the question" in res["summary"]["next_step"]
+
+
+def test_slow_incorrect_answers_do_not_trigger_timing_signals():
+    atts = []
+    for i in range(6):
+        atts += [_a(f"q{i}", 1, False, 12000), _a(f"q{i}", 2, True, 9000)]
+    res = analyze_attempts(atts)
+    assert res["risk"]["level"] != "low"
+    assert _signal(res, "repeated_rapid_incorrect")["points"] == 0
+    assert _signal(res, "consistently_rapid_first_answers")["points"] == 0
+    assert "quickly" not in res["summary"]["observation"], "explanation must not mention signals that did not fire"
+
+
+def test_corrected_answers_versus_unresolved_questions():
+    corrected = [_a(f"q{i}", 1, False, 8000) for i in range(5)] + [_a(f"q{i}", 2, True, 8000) for i in range(5)]
+    res = analyze_attempts(corrected)
+    assert res["metrics"]["correction_rate_pct"] == 100.0 and res["metrics"]["unresolved_questions"] == 0
+    assert _signal(res, "unresolved_after_repeated_misses")["points"] == 0
+
+    abandoned = [_a(f"q{i}", 1, False, 8000) for i in range(5)] + [_a("q0", 2, True, 8000)]
+    abandoned += [_a("q1", n, False, 8000) for n in (2, 3)]          # q1: three wrong tries, never solved
+    res = analyze_attempts(abandoned)
+    assert res["metrics"]["unresolved_questions"] == 4
+    assert res["metrics"]["correction_rate_pct"] == 20.0
+    assert _signal(res, "unresolved_after_repeated_misses")["points"] == 1
+    assert "unsolved" in res["summary"]["observation"]
+
+
+def test_hint_usage_is_never_penalised():
+    good = [_a(f"q{i}", 1, True, 6000) for i in range(5)]
+    hinted_misses = [_a(f"h{i}", 1, False, 3000, hint=True) for i in range(5)]   # asked for a hint first, then missed
+    res = analyze_attempts(good + hinted_misses)
+    assert res["risk"]["level"] == "low" and res["metrics"]["hinted_questions"] == 5
+    assert res["metrics"]["first_attempt_accuracy_pct"] == 100.0, "hinted questions leave the accuracy signals alone"
+    # Only hinted evidence is not enough to judge anything -- and certainly not a high risk.
+    only_hinted = analyze_attempts(hinted_misses + [_a(f"h{i}", 2, True, 500, hint=True) for i in range(5)])
+    assert only_hinted["status"] == "insufficient_data" and only_hinted["hinted_questions"] == 5
+    # A miss made BEFORE the hint still counts, but the hinted retry is not "rapid".
+    before = []
+    for i in range(5):
+        before += [_a(f"q{i}", 1, False, 9000), _a(f"q{i}", 2, False, 200, hint=True), _a(f"q{i}", 3, True, 200, hint=True)]
+    res = analyze_attempts(before)
+    assert res["metrics"]["first_attempt_accuracy_pct"] == 0.0
+    assert _signal(res, "repeated_rapid_incorrect")["points"] == 0
+
+
+def test_hint_wait_is_excluded_from_response_time_and_consumed_once():
+    s = new_student()
+    r = start(s)
+    sid, qid = r["session_id"], r["id"]
+    session = quest_session.SESSIONS[sid]
+    attempt_store.record_hint_event(session_id=sid, student_id=s, question_id=qid, duration_ms=4000, ok=True)
+    session.served_at = time.time() - 6                       # 6 s since the question appeared, 4 s of it in the hint
+    assert submit(sid, s, qid, wrongs_of(qid)[0])["correct"] is False
+    first = attempt_rows(sid)[0]
+    assert first["hint_used"] == 1 and first["hint_wait_ms"] == 4000
+    assert 1500 <= first["response_time_ms"] <= 3500, first["response_time_ms"]
+    assert submit(sid, s, qid, right_of(qid))["correct"] is True      # quick retry: nothing left to subtract
+    second = attempt_rows(sid)[1]
+    assert second["hint_used"] == 1 and second["hint_wait_ms"] == 0 and second["response_time_ms"] < 1500
+    view = quest_session.attempt_view(first)
+    assert view["hint_used"] is True and view["session_id"] == sid and view["topic"] == "os"
+
+
+def test_failed_hint_request_time_is_excluded_but_not_counted_as_a_hint():
+    s = new_student()
+    r = start(s)
+    sid, qid = r["session_id"], r["id"]
+    attempt_store.record_hint_event(session_id=sid, student_id=s, question_id=qid, duration_ms=3000, ok=False)
+    quest_session.SESSIONS[sid].served_at = time.time() - 4
+    submit(sid, s, qid, right_of(qid))
+    row = attempt_rows(sid)[0]
+    assert row["hint_used"] == 0 and row["hint_wait_ms"] == 3000 and row["response_time_ms"] < 2500
+
+
+def test_ai_hint_endpoint_logs_a_server_measured_hint_event():
+    s = new_student()
+    r = start(s)
+    sid, qid = r["session_id"], r["id"]
+    real = main.ai_hint.generate_hint
+    main.ai_hint.generate_hint = lambda q: (time.sleep(0.05), "Think about the core idea.")[1]
+    try:
+        out = main.ai_hint_for_question(main.HintRequest(session_id=sid, student_id=s, question_id=qid))
+    finally:
+        main.ai_hint.generate_hint = real
+    assert out["hint"]
+    wait, used = attempt_store.pending_hint_info(sid, qid)
+    assert used is True and wait >= 40
+    main.ai_hint.generate_hint = lambda q: (_ for _ in ()).throw(main.ai_hint.HintError("nope"))
+    try:
+        try:
+            main.ai_hint_for_question(main.HintRequest(session_id=sid, student_id=s, question_id=qid))
+        except HTTPException:
+            pass
+    finally:
+        main.ai_hint.generate_hint = real
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM hint_events WHERE session_id = ?", (sid,)).fetchone()[0] == 2
+    conn.close()
+
+
+def test_two_question_quest_has_insufficient_evidence():
+    res = analyze_attempts([_a("q1", 1, False, 300), _a("q1", 2, True, 300), _a("q2", 1, False, 300), _a("q2", 2, True, 300)])
+    assert res["status"] == "insufficient_data" and "risk" not in res
+    assert res["summary"]["level"] == "insufficient_data" and "Not enough data" in res["summary"]["headline"]
+
+
+def test_chance_baseline_depends_on_the_number_of_options():
+    def run(k):
+        atts = [_a(f"q{i}", 1, i < 3, 6000, k=k) for i in range(4)] + [_a("q4", 1, True, 6000, mode="short_answer")]
+        return analyze_attempts(atts)
+    two, four = run(2), run(4)
+    assert two["chance_baseline"]["expected_correct_by_guessing"] == 2.0
+    assert four["chance_baseline"]["expected_correct_by_guessing"] == 1.0
+    assert two["chance_baseline"]["consistent_with_chance"] is True      # 3/4 right is ordinary for coin flips
+    assert four["chance_baseline"]["consistent_with_chance"] is False    # ...but unlikely for 1-in-4 guesses
+
+
+def test_missing_or_untrusted_timing_never_counts_as_rapid():
+    atts = []
+    for i in range(5):
+        atts += [_a(f"q{i}", 1, False, None), _a(f"q{i}", 2, False, 50, valid=False), _a(f"q{i}", 3, True, None)]
+    res = analyze_attempts(atts)
+    assert res["status"] == "ok"
+    assert _signal(res, "repeated_rapid_incorrect")["points"] == 0
+    assert _signal(res, "consistently_rapid_first_answers")["points"] == 0
+    assert res["metrics"]["response_time"]["timed_first_answers"] == 0
+
+
+def test_duplicate_submission_is_rejected_and_not_double_counted():
+    s = new_student()
+    r = start(s)
+    sid, qid = r["session_id"], r["id"]
+    assert submit(sid, s, qid, wrongs_of(qid)[0])["correct"] is False
+    try:
+        attempt_store.record_attempt(student_id=s, session_id=sid, question_id=qid, topic="os", selected_answer="x",
+                                     is_correct=False, attempt_no=1, response_time_ms=10)
+        raise AssertionError("duplicate attempt number must be rejected")
+    except sqlite3.IntegrityError:
+        pass
+    assert len(attempt_rows(sid)) == 1
+
+
+def test_reload_mid_question_marks_the_next_time_untrusted_only_once():
+    s = new_student()
+    r = start(s)
+    sid, qid = r["session_id"], r["id"]
+    quest_session.SESSIONS.clear()                                   # page refresh / backend restart
+    assert submit(sid, s, qid, wrongs_of(qid)[0])["correct"] is False
+    assert submit(sid, s, qid, right_of(qid))["correct"] is True
+    rows = attempt_rows(sid)
+    assert [r_["timing_valid"] for r_ in rows] == [0, 1]
+    assert quest_session.attempt_view(rows[0])["timing_valid"] is False
+
+
+def test_aggregation_keeps_separate_quests_separate():
+    atts = []
+    for session in ("s1", "s2"):
+        for i in range(3):                                           # same question ids in both quests
+            atts += [_a(f"q{i}", 1, False, 7000, session=session, topic="os"),
+                     _a(f"q{i}", 2, True, 7000, session=session, topic="os")]
+    merged = analyze_attempts(atts)
+    assert merged["status"] == "ok" and merged["metrics"]["evaluated_questions"] == 6
+    assert analyze_attempts([a for a in atts if a["session_id"] == "s1"])["status"] == "insufficient_data"
+    assert [t["topic"] for t in merged["topic_patterns"]] == ["os"]  # 6 os questions >= the topic threshold
+
+
+def test_topic_patterns_need_enough_evidence():
+    atts = [_a(f"o{i}", 1, False, 7000, topic="os") for i in range(5)] + [_a(f"d{i}", 1, True, 7000, topic="dsa") for i in range(2)]
+    res = analyze_attempts(atts)
+    topics = {t["topic"]: t for t in res["topic_patterns"]}
+    assert "dsa" not in topics, "two questions are not enough to judge a topic"
+    assert topics["os"]["needs_practice"] is True
+
+
+def test_dashboard_reports_summary_and_overall_analysis():
+    s = new_student()
+    sid, _ = play_quest(s, first_try_wrong=0)
+    d = main.get_dashboard(sid, s)
+    assert d["analysis"]["summary"]["next_step"] and d["analysis_overall"]["summary"]["headline"]
+    assert d["analysis_overall"]["status"] == "ok"
+
+
+def test_summary_text_only_mentions_fired_signals():
+    from guess_analysis import _OBSERVATIONS
+    atts = []
+    for i in range(5):
+        atts += [_a(f"q{i}", 1, False, 6000), _a(f"q{i}", 2, True, 6000)]
+    res = analyze_attempts(atts)
+    fired = {s["id"] for s in res["risk"]["signals"] if s["triggered"]}
+    for sid, phrase in _OBSERVATIONS.items():
+        assert (phrase in res["summary"]["observation"]) == (sid in fired), sid
+
+
+# ------------------------------------------------- minimum of 5 unique questions per level
+
+def _all_levels():
+    return [lv for st in main.CATALOG["stages"] for lv in st["stages"]] if False else \
+        [lv for st in main.CATALOG["stages"] for lv in st["levels"]]
+
+
+def test_every_level_has_at_least_five_unique_questions():
+    from levels_config import MIN_LEVEL_QUESTIONS
+    assert MIN_LEVEL_QUESTIONS == 5
+    levels = _all_levels()
+    assert len(levels) == 16
+    for lv in levels:
+        ids = lv["question_ids"]
+        assert len(ids) >= 5 and lv["question_count"] == len(ids) and lv["meets_minimum"], lv["id"]
+        assert len(set(ids)) == len(ids), f"{lv['id']} repeats a question"
+        prompts = [progression._prompt_key(main.QUESTIONS_BY_ID[i]) for i in ids]
+        assert len(set(prompts)) == len(prompts), f"{lv['id']} repeats a prompt"
+        assert all(main.QUESTIONS_BY_ID[i]["courseId"] == lv["course_id"] for i in ids), "subject must not change"
+
+
+def test_levels_get_harder_from_stage_to_stage():
+    for course in ("os", "dbms", "dsa", "lang"):
+        avg = []
+        for stage in ("grove", "caverns", "trials", "boss"):
+            ids = main.CATALOG["levels"][f"{stage}-{course}"]["question_ids"]
+            tiers = [main.QUESTIONS_BY_ID[i]["tier"] for i in ids]
+            assert tiers == sorted(tiers), "questions inside a level go easiest first"
+            avg.append(sum(tiers) / len(tiers))
+        assert avg == sorted(avg) and avg[0] < avg[-1], (course, avg)
+
+
+def test_a_started_level_serves_all_its_questions_once():
+    s = new_student()
+    expected = main.CATALOG["levels"]["grove-dbms"]["question_ids"]
+    assert isinstance(start_lvl(s, "grove-os"), int) is False
+    solve_level(s, "grove-os")
+    r = start_lvl(s, "grove-dbms")
+    assert r["quest_length"] == len(expected) >= 5 and r["level_info"]["question_count"] == len(expected)
+    seen, qid = [], r["id"]
+    while qid:
+        seen.append(qid)
+        res = submit(r["session_id"], s, qid, right_answer(qid))
+        qid = res["next_question"]["id"] if res["next_question"] else None
+    assert seen == expected
+
+
+def test_backend_refuses_a_level_session_with_too_few_or_repeated_questions():
+    for ids in (["os-mcq-1", "os-mcq-2"], ["os-mcq-1"] * 5, ["os-mcq-1", "os-mcq-2", "os-mcq-3", "os-mcq-4"]):
+        try:
+            quest_session.create_session("os", "mcq", 0, "someone", len(ids), level_id="grove-os", question_ids=ids)
+            raise AssertionError(f"{ids} should have been refused")
+        except quest_session.SessionError as e:
+            assert e.status_code == 503
+
+
+def test_duplicate_questions_do_not_count_towards_the_minimum():
+    level = {"id": "x", "course_id": "os", "selector": {"max_questions": 5, "pools": [
+        {"mode": "mcq", "tier": 1, "count": 5}]}}
+    bank = [{"id": f"a{i}", "courseId": "os", "mode": "mcq", "tier": 1, "prompt": "Same question?"} for i in range(3)]
+    bank += [{"id": "b", "courseId": "os", "mode": "mcq", "tier": 1, "prompt": "  same QUESTION ? "},
+             {"id": "c", "courseId": "os", "mode": "mcq", "tier": 1, "prompt": "A different one"}]
+    assert progression.resolve_question_ids(level, bank) == ["a0", "c"]
+
+
+class _FakeBank:
+    """Takes the dsa tier-1 multiple-choice questions out of the bank (so grove-dsa is short) and
+    restores everything afterwards, including any questions the test caused to be generated."""
+
+    def __enter__(self):
+        self.all = list(main.ALL_QUESTIONS)
+        self.gen_path = level_fill.GENERATED_PATH
+        level_fill.GENERATED_PATH = os.path.join(_tmpdir, f"generated-{time.time_ns()}.json")
+        main.ALL_QUESTIONS[:] = [q for q in self.all if not (q["courseId"] == "dsa" and q["mode"] == "mcq" and q["tier"] == 1)]
+        main.rebuild_catalog()
+        return self
+
+    def __exit__(self, *exc):
+        main.ALL_QUESTIONS[:] = self.all
+        for key in [k for k, q in list(main.QUESTIONS_BY_ID.items()) if q.get("generated")]:
+            q = main.QUESTIONS_BY_ID.pop(key)
+            main.QUESTIONS_BY_COURSE_MODE[(q["courseId"], q["mode"])].remove(q)
+            main.QUESTIONS_BY_COURSE_MODE_TIER[(q["courseId"], q["mode"])][q["tier"]].remove(q)
+        level_fill.GENERATED_PATH = self.gen_path
+        main.rebuild_catalog()
+
+
+def _model_output(*prompts):
+    return json.dumps({"questions": [
+        {"prompt": p, "options": [f"{p} A", f"{p} B", f"{p} C", f"{p} D"], "correct_answer": f"{p} A",
+         "explanation": "Because."} for p in prompts]})
+
+
+def _unlock_grove_dsa(student):
+    for lv in ("grove-os", "grove-dbms"):
+        solve_level(student, lv)
+
+
+def test_a_short_level_is_topped_up_by_generation_before_it_starts():
+    s = new_student()
+    _unlock_grove_dsa(s)
+    with _FakeBank():
+        assert main.CATALOG["levels"]["grove-dsa"]["meets_minimum"] is False
+        existing = next(q["prompt"] for q in main.ALL_QUESTIONS if q["courseId"] == "dsa")
+        calls = []
+
+        def fake(prompt, system=None, timeout=None, **kw):
+            calls.append(prompt)
+            return _model_output(existing, "What does a stack do?", "Name a queue property.", "Define a heap.")
+
+        real = level_fill.ollama_client.generate
+        level_fill.ollama_client.generate = fake
+        try:
+            r = start_lvl(s, "grove-dsa")
+        finally:
+            level_fill.ollama_client.generate = real
+        assert isinstance(r, dict) and r["quest_length"] == 5 and len(calls) == 1
+        ids = main.CATALOG["levels"]["grove-dsa"]["question_ids"]
+        assert len(set(ids)) == 5 and sum(1 for i in ids if i.startswith("gen-dsa-mcq-")) == 2
+        assert existing not in [main.QUESTIONS_BY_ID[i]["prompt"] for i in ids if i.startswith("gen-")], "duplicates dropped"
+        saved = level_fill.load_generated()
+        assert {q["id"] for q in saved} >= {i for i in ids if i.startswith("gen-")}, "generated questions are saved"
+        # "Previously saved questions": after a restart the saved ones come back and nothing is generated again.
+        gen_ids = [i for i in ids if i.startswith("gen-")]
+        for gid in gen_ids:
+            q = main.QUESTIONS_BY_ID.pop(gid)
+            main.ALL_QUESTIONS.remove(q)
+            main.QUESTIONS_BY_COURSE_MODE[("dsa", "mcq")].remove(q)
+            main.QUESTIONS_BY_COURSE_MODE_TIER[("dsa", "mcq")][1].remove(q)
+        main.register_questions(level_fill.load_generated())
+        main.rebuild_catalog()
+        assert main.CATALOG["levels"]["grove-dsa"]["question_ids"] == ids
+        assert main.CATALOG["levels"]["grove-dsa"]["meets_minimum"]
+
+
+def test_failed_generation_means_the_level_does_not_start():
+    s = new_student()
+    _unlock_grove_dsa(s)
+    real = level_fill.ollama_client.generate
+    cases = {
+        "ollama down": lambda *a, **k: (_ for _ in ()).throw(level_fill.ollama_client.OllamaUnavailable("down")),
+        "not json": lambda *a, **k: "I am not JSON",
+        "only duplicates": lambda *a, **k: _model_output(next(q["prompt"] for q in main.ALL_QUESTIONS if q["courseId"] == "dsa")),
+        "malformed options": lambda *a, **k: json.dumps({"questions": [{"prompt": "Q?", "options": ["a"], "correct_answer": "z"}]}),
+    }
+    for name, fake in cases.items():
+        with _FakeBank():
+            level_fill.ollama_client.generate = fake
+            try:
+                r = start_lvl(s, "grove-dsa")
+            finally:
+                level_fill.ollama_client.generate = real
+            assert r == 503, (name, r)
+            assert main.CATALOG["levels"]["grove-dsa"]["meets_minimum"] is False, name
+            assert level_fill.load_generated() == [], name
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM sessions WHERE student_id = ? AND level_id = 'grove-dsa'", (s,)).fetchone()[0] == 0
+    conn.close()
+
+
+def test_old_short_level_sessions_are_not_resumed():
+    s = new_student()
+    old = quest_session.QuestSession("os", "mcq", 0, s, 2, level_id="grove-os", question_ids=["os-mcq-1", "os-mcq-2"])
+    old.serve("os-mcq-1")
+    attempt_store.save_session(old.to_state())
+    assert "grove-os" not in attempt_store.open_level_ids(s)
+    r = start_lvl(s, "grove-os")
+    assert r["resumed"] is False and r["quest_length"] == 5 and r["session_id"] != old.id
+
+
+def test_completion_results_report_the_real_question_count():
+    s = new_student()
+    sid, _ = solve_level(s, "grove-os")
+    assert main.get_level_results("grove-os", s, sid)["questions"] == 5
+    assert main.get_level_results("grove-os", s, sid)["level"]["question_count"] == 5
+
+
+def test_guesswork_needs_five_different_questions_and_a_finished_quest():
+    five = analyze_attempts([_a(f"q{i}", 1, i % 2 == 0, 6000) for i in range(5)])
+    assert five["status"] == "ok" and five["metrics"]["attempted_questions"] == 5
+    four = analyze_attempts([_a(f"q{i}", 1, True, 6000) for i in range(4)])
+    assert four["status"] == "insufficient_data" and "5 different questions" in four["reason"]
+    # The same question five times is one question, not five.
+    repeated = analyze_attempts([_a("q1", n, n == 5, 6000) for n in range(1, 6)])
+    assert repeated["status"] == "insufficient_data"
+    # Five attempted but too many answered after a hint: not enough left to judge.
+    mostly_hinted = analyze_attempts([_a(f"q{i}", 1, False, 6000, hint=i < 3) for i in range(5)])
+    assert mostly_hinted["status"] == "insufficient_data" and "hint" in mostly_hinted["reason"]
+    # End to end: unfinished quest -> wait; finished 5-question level -> an estimate.
+    s = new_student()
+    r = start_lvl(s, "grove-os")
+    submit(r["session_id"], s, r["id"], right_answer(r["id"]))
+    unfinished = main.get_dashboard(r["session_id"], s)["analysis"]
+    assert unfinished["status"] == "insufficient_data" and "Finish the quest" in unfinished["reason"]
+    s = new_student()                       # a fresh hero, so the run above is not resumed
+    sid, _ = solve_level(s, "grove-os")
+    done = main.get_dashboard(sid, s)["analysis"]
+    assert done["status"] == "ok" and done["metrics"]["attempted_questions"] == 5
 
 
 if __name__ == "__main__":

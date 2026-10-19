@@ -43,10 +43,24 @@ COURSE_TITLES = {
     "custom": "Upload Your Own",
 }
 
+# The least a level may contain. Enforced when the catalog is built, when a level is
+# started (main.start_level) and by the guesswork analysis (guess_analysis.CONFIG).
+MIN_LEVEL_QUESTIONS = 5
+
+
+def _pool(mode: str, tier: int, count: int) -> dict:
+    return {"mode": mode, "tier": tier, "count": count}
+
+
 # Each stage describes the question selector shared by its levels:
-#   modes / tiers  : which questions of a course belong to the level
-#   max_questions  : cap on the set size (the first N in a stable order are used)
+#   pools          : ordered (mode, tier, count) slices of a course's bank. A level takes the
+#                    first `count` questions (stable id order) of each pool, in order, until
+#                    it has max_questions. A single (mode, tier) pool only holds 2 questions
+#                    for most courses, which is why levels used to have 2-4 questions.
+#   max_questions  : cap on the set size
 #   label          : appended to the course title to name the level
+# Questions inside a level are served easiest tier first. Difficulty rises from stage to
+# stage by moving to harder tiers and, in "The Trial Grounds", to answers in your own words.
 STAGES = [
     {
         "id": "grove",
@@ -55,7 +69,8 @@ STAGES = [
         "theme": "forest",
         "label": "Foundations",
         "difficulty": "Easy",
-        "selector": {"modes": ["mcq"], "tiers": [1], "max_questions": 5},
+        "selector": {"pools": [_pool("mcq", 1, 2), _pool("short_answer", 1, 2), _pool("mcq", 2, 1)],
+                     "max_questions": 5},
     },
     {
         "id": "caverns",
@@ -64,7 +79,8 @@ STAGES = [
         "theme": "teal",
         "label": "Depths",
         "difficulty": "Medium",
-        "selector": {"modes": ["mcq"], "tiers": [2], "max_questions": 5},
+        "selector": {"pools": [_pool("mcq", 2, 2), _pool("short_answer", 1, 1), _pool("short_answer", 2, 2)],
+                     "max_questions": 5},
     },
     {
         "id": "trials",
@@ -73,7 +89,8 @@ STAGES = [
         "theme": "steel",
         "label": "Trial",
         "difficulty": "Hard",
-        "selector": {"modes": ["short_answer"], "tiers": [1, 2], "max_questions": 5},
+        "selector": {"pools": [_pool("short_answer", 1, 1), _pool("short_answer", 2, 2), _pool("short_answer", 3, 2)],
+                     "max_questions": 5},
     },
     {
         "id": "boss",
@@ -82,7 +99,8 @@ STAGES = [
         "theme": "violet",
         "label": "Boss Challenge",
         "difficulty": "Boss",
-        "selector": {"modes": ["mcq", "short_answer"], "tiers": [3], "max_questions": 5},
+        "selector": {"pools": [_pool("short_answer", 2, 1), _pool("mcq", 3, 2), _pool("short_answer", 3, 2)],
+                     "max_questions": 5},
     },
 ]
 
