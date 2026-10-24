@@ -1,0 +1,43 @@
+# Render Blueprint for the QuestVerse API. The frontend is deployed separately on Vercel.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: questverse-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .                 # repo root: the image needs both backend/ and ai/
+    plan: starter                    # persistent disks are not available on the free plan
+    healthCheckPath: /health         # does not need Ollama, the database or a login
+    autoDeploy: true
+
+    # SQLite lives on this disk. Without it the database is erased on every deploy/restart,
+    # so accounts, progress and reports would not persist. One instance only: a disk can't be
+    # shared, and the app keeps quest sessions in process memory.
+    disk:
+      name: questverse-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      - key: QUESTVERSE_ENV
+        value: production
+      - key: QUESTVERSE_DB
+        value: /var/data/questverse.db
+      - key: FRONTEND_URL            # your Vercel URL(s), comma separated, no trailing slash
+        sync: false
+      # Optional AI hints / PDF quizzes: a reachable Ollama server (Render can't run one for you).
+      - key: OLLAMA_HOST
+        sync: false
+      - key: OLLAMA_MODEL
+        value: llama3.2:1b
+      # Optional weekly report emails: set both of these to switch them on.
+      - key: QUESTVERSE_SMTP_HOST
+        sync: false
+      - key: QUESTVERSE_SMTP_FROM
+        sync: false
+      - key: QUESTVERSE_SMTP_PORT
+        value: "587"
+      - key: QUESTVERSE_SMTP_USER
+        sync: false
+      - key: QUESTVERSE_SMTP_PASSWORD
+        sync: false

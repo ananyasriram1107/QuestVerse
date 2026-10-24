@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 //   #/play/<levelId>           a level's quiz
 //   #/results/<levelId>/<sessionId>   results of a finished run
 //   #/review/<levelId>/<sessionId>    review of a finished run (guessing pattern)
+//   #/report                    weekly progress report
 //   #/free  and  #/upload      free-play course picker / PDF upload (existing screens)
 //
 // Routes only say WHAT to show. Whether a level may be opened is decided by
@@ -28,6 +29,8 @@ export function parseHash(hash = window.location.hash) {
       return a ? { name: "results", levelId: a, sessionId: b ?? null } : { name: "map" };
     case "review":
       return a && b ? { name: "review", levelId: a, sessionId: b } : { name: "map" };
+    case "report":
+      return { name: "report" };
     case "free":
       return { name: "free" };
     case "upload":
@@ -49,6 +52,8 @@ export function pathFor(route) {
       return `#/results/${encodeURIComponent(route.levelId)}${route.sessionId ? `/${encodeURIComponent(route.sessionId)}` : ""}`;
     case "review":
       return `#/review/${encodeURIComponent(route.levelId)}/${encodeURIComponent(route.sessionId)}`;
+    case "report":
+      return "#/report";
     case "free":
       return "#/free";
     case "upload":

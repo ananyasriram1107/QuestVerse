@@ -32,8 +32,14 @@ import os
 import urllib.error
 import urllib.request
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+def _host(raw: str) -> str:
+    """OLLAMA_HOST as a base URL. Ollama's own docs write it without a scheme (host:11434)."""
+    raw = raw.strip().rstrip("/")
+    return raw if raw.startswith(("http://", "https://")) else f"http://{raw}"
+
+
+OLLAMA_HOST = _host(os.environ.get("OLLAMA_HOST") or "http://localhost:11434")   # blank counts as unset
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.2:1b"
 DEFAULT_TIMEOUT_S = float(os.environ.get("OLLAMA_TIMEOUT_S", "8"))
 
 

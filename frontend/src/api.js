@@ -1,13 +1,57 @@
 import { getFirstQuestionOffline, submitAnswerOffline, hasOfflineQuestion } from "./offline/offlineEngine";
 import { isOfflineMode } from "./utils/offlineMode";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8010";
+// Where the backend lives. Local dev falls back to the local server; a production build must be
+// given VITE_API_BASE_URL (the Vercel project setting) -- it is a public URL, never a secret.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://127.0.0.1:8010" : "")).replace(/\/+$/, "");
+const NOT_CONFIGURED =
+  "This copy of QuestVerse doesn't know where its server is (VITE_API_BASE_URL isn't set). Free Play still works offline.";
 
 class ClientRejectedError extends Error {}
 
+// ---- Accounts: every request carries the login token; hero ids become `u<user>.<hero>` ----
+const TOKEN_KEY = "questverse_token_v1";
+let currentUserId = null;
+
+export const getToken = () => {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const setToken = (token) => {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // storage unavailable -- the session just won't survive a refresh
+  }
+};
+
+export function setCurrentUser(userId) {
+  currentUserId = userId;
+}
+
+// The server keeps each hero's progress under the user's own id; the UI keeps using plain hero ids.
+const serverStudent = (id) => (currentUserId && id && !/^u\d+\./.test(id) ? `u${currentUserId}.${id}` : id);
+
+function apiFetch(url, options = {}) {
+  const token = getToken();
+  const headers = token ? { ...options.headers, Authorization: `Bearer ${token}` } : options.headers;
+  return fetch(url, { ...options, headers }).then((response) => {
+    if (response.status === 401 && token) {
+      setToken(null);
+      window.dispatchEvent(new Event("questverse:logout"));   // the session ended -- App returns to the login page
+    }
+    return response;
+  });
+}
+
 async function fetchWithRetry(url, options = {}) {
   try {
-    const response = await fetch(url, options);
+    const response = await apiFetch(url, options);
     if (response.status >= 400 && response.status < 500) {
       // Deliberate server refusal (locked question, wrong student...): don't
       // retry, and show the server's own explanation.
@@ -24,7 +68,7 @@ async function fetchWithRetry(url, options = {}) {
   } catch (firstError) {
     if (firstError instanceof ClientRejectedError) throw firstError;
     await new Promise((resolve) => setTimeout(resolve, 700));
-    const retryResponse = await fetch(url, options);
+    const retryResponse = await apiFetch(url, options);
     if (!retryResponse.ok) {
       throw new Error("Connection issue. Make sure the backend server is running.", { cause: firstError });
     }
@@ -44,7 +88,7 @@ export async function getFirstQuestion(courseId = "os", mode = "mcq", startXp = 
 
   try {
     const response = await fetchWithRetry(
-      `${API_BASE_URL}/question/first?courseId=${courseId}&mode=${mode}&start_xp=${startXp}&student_id=${encodeURIComponent(studentId)}`
+      `${API_BASE_URL}/question/first?courseId=${courseId}&mode=${mode}&start_xp=${startXp}&student_id=${encodeURIComponent(serverStudent(studentId))}`
     );
     return await response.json();
   } catch {
@@ -55,8 +99,8 @@ export async function getFirstQuestion(courseId = "os", mode = "mcq", startXp = 
 // Resumes a server session after a page refresh; null if it expired/unknown.
 export async function getSession(sessionId, studentId) {
   try {
-    const response = await fetch(
-      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}?student_id=${encodeURIComponent(studentId)}`
+    const response = await apiFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}?student_id=${encodeURIComponent(serverStudent(studentId))}`
     );
     return response.ok ? await response.json() : null;
   } catch {
@@ -66,8 +110,8 @@ export async function getSession(sessionId, studentId) {
 
 // Quest report computed by the backend from the persisted attempt log.
 export async function getDashboard(sessionId, studentId) {
-  const response = await fetch(
-    `${API_BASE_URL}/dashboard/${encodeURIComponent(sessionId)}?student_id=${encodeURIComponent(studentId)}`
+  const response = await apiFetch(
+    `${API_BASE_URL}/dashboard/${encodeURIComponent(sessionId)}?student_id=${encodeURIComponent(serverStudent(studentId))}`
   );
   if (!response.ok) {
     let detail = `Request failed (${response.status})`;
@@ -90,10 +134,10 @@ export async function requestAiHint(payload) {
   }
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}/hint/ai`, {
+    response = await apiFetch(`${API_BASE_URL}/hint/ai`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, student_id: serverStudent(payload.student_id) }),
     });
   } catch {
     throw new Error("Can't reach the QuestVerse server. Make sure the backend is running.");
@@ -126,12 +170,13 @@ export class ApiError extends Error {
 // happily matches /progress/me). Without this check its unexpected JSON would crash
 // the map instead of explaining the problem.
 async function levelRequest(path, options, looksRight = () => true) {
+  if (!API_BASE_URL) throw new ApiError(NOT_CONFIGURED, 0);
   if (isOfflineMode()) {
     throw new ApiError("Levels need the live server. Switch Offline Mode off, or use Free Play.", 0);
   }
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, options);
+    response = await apiFetch(`${API_BASE_URL}${path}`, options);
   } catch (cause) {
     throw new ApiError("Can't reach the QuestVerse server. Make sure the backend is running.", 0, { cause });
   }
@@ -165,21 +210,21 @@ const post = (body) => ({
 const q = encodeURIComponent;
 
 export const getProgress = (studentId) =>
-  levelRequest(`/progress/me?student_id=${q(studentId)}`, undefined, (d) => Array.isArray(d?.stages) && d.stages.every((s) => Array.isArray(s?.levels)) && Boolean(d?.totals));
+  levelRequest(`/progress/me?student_id=${q(serverStudent(studentId))}`, undefined, (d) => Array.isArray(d?.stages) && d.stages.every((s) => Array.isArray(s?.levels)) && Boolean(d?.totals));
 
 // resumeOnly: true when re-entering from a URL/refresh -- resume an unfinished
 // run, never start a new one.
 export const startLevel = (levelId, studentId, resumeOnly = false) =>
-  levelRequest(`/levels/${q(levelId)}/start`, post({ student_id: studentId, resume_only: resumeOnly }),
+  levelRequest(`/levels/${q(levelId)}/start`, post({ student_id: serverStudent(studentId), resume_only: resumeOnly }),
     (d) => Boolean(d?.session_id && d?.question && d?.level_info));
 
 export const completeLevel = (levelId, studentId, sessionId) =>
-  levelRequest(`/levels/${q(levelId)}/complete`, post({ student_id: studentId, session_id: sessionId }),
+  levelRequest(`/levels/${q(levelId)}/complete`, post({ student_id: serverStudent(studentId), session_id: sessionId }),
     (d) => Boolean(d?.level && d?.xp));
 
 export const getLevelResults = (levelId, studentId, sessionId) =>
   levelRequest(
-    `/levels/${q(levelId)}/results?student_id=${q(studentId)}${sessionId ? `&session_id=${q(sessionId)}` : ""}`,
+    `/levels/${q(levelId)}/results?student_id=${q(serverStudent(studentId))}${sessionId ? `&session_id=${q(sessionId)}` : ""}`,
     undefined,
     (d) => Boolean(d?.level && d?.xp)
   );
@@ -193,7 +238,7 @@ export async function submitAnswer(payload) {
     const response = await fetchWithRetry(`${API_BASE_URL}/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, student_id: serverStudent(payload.student_id) }),
     });
     return await response.json();
   } catch (err) {
@@ -221,7 +266,7 @@ export async function generateQuestionsFromPdf(file, mode, count) {
   formData.append("mode", mode);
   formData.append("count", String(count));
 
-  const response = await fetch(`${API_BASE_URL}/custom/generate`, {
+  const response = await apiFetch(`${API_BASE_URL}/custom/generate`, {
     method: "POST",
     body: formData,
   });
@@ -239,3 +284,65 @@ export async function generateQuestionsFromPdf(file, mode, count) {
 
   return response.json();
 }
+
+
+// ---- Account endpoints (these need the live server; there is no offline login) ----
+async function accountRequest(path, options) {
+  if (!API_BASE_URL) throw new ApiError(NOT_CONFIGURED, 0);
+  let response;
+  try {
+    response = await apiFetch(`${API_BASE_URL}${path}`, options);
+  } catch (cause) {
+    throw new ApiError("Can't reach the QuestVerse server. Make sure the backend is running.", 0, { cause });
+  }
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    // not JSON
+  }
+  if (!response.ok) throw new ApiError(body?.detail || `Request failed (${response.status})`, response.status);
+  return body;
+}
+
+export async function register(username, password, email) {
+  const body = await accountRequest("/auth/register", post({ username, password, email: email || null }));
+  setToken(body.token);
+  return body.user;
+}
+
+export async function login(username, password) {
+  const body = await accountRequest("/auth/login", post({ username, password }));
+  setToken(body.token);
+  return body.user;
+}
+
+// The signed-in user for the saved token, or null if there is none / it has expired.
+export async function fetchMe() {
+  if (!getToken()) return null;
+  try {
+    return (await accountRequest("/auth/me")).user;
+  } catch (error) {
+    if (error.status === 401) return null;
+    throw error;
+  }
+}
+
+export async function logout() {
+  try {
+    await accountRequest("/auth/logout", post({}));
+  } catch {
+    // already gone -- the local token is dropped either way
+  }
+  setToken(null);
+}
+
+export const getWeeklyReport = (week) => accountRequest(`/me/weekly-report${week ? `?week=${q(week)}` : ""}`);
+
+export const updateEmail = (email) =>
+  accountRequest("/me/email", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+
+export const getServerAchievements = () => accountRequest("/me/achievements");
+
+export const putServerAchievements = (data) =>
+  accountRequest("/me/achievements", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });

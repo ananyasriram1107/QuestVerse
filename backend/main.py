@@ -6,7 +6,9 @@ import sys
 import time
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -22,8 +24,11 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from engine import level_from_xp
+import accounts
 import ai_hint
+import cors_config
 import level_fill
+import weekly_report
 from keyword_grader import grade_keyword_answer
 from course_content import (
     DBMS_QUESTIONS,
@@ -50,14 +55,40 @@ from custom_upload import GenerationFailedError, PdfHasNoTextError, generate_que
 
 log = logging.getLogger(__name__)
 app = FastAPI()
+
+# Everything except these needs a logged-in user. Registered BEFORE the CORS middleware below, so
+# CORS wraps it and even a 401 carries the CORS headers the browser needs to read it.
+PUBLIC_PATHS = {"/health", "/auth/register", "/auth/login", "/docs", "/redoc", "/openapi.json"}
+
+
+def bearer_token(request: Request) -> Optional[str]:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else None
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    user = await run_in_threadpool(accounts.user_for_token, bearer_token(request))
+    if user is None:
+        return JSONResponse(status_code=401, content={"detail": "Please log in to continue."})
+    request.state.user = user
+    reset = attempt_store.ACTIVE_USER_ID.set(user["id"])
+    try:
+        return await call_next(request)
+    finally:
+        attempt_store.ACTIVE_USER_ID.reset(reset)
+
 attempt_store.init_db()
 
-# Wide open for hackathon speed — tighten later if it ever matters
+ALLOWED_ORIGINS = cors_config.allowed_origins(os.environ.get("FRONTEND_URL"), os.environ.get("QUESTVERSE_ENV", "development"))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,        # the configured frontend(s) (+ localhost unless production) -- never "*"
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,              # logins use a bearer token, not cookies
 )
 
 
@@ -459,9 +490,15 @@ _HINTS_IN_FLIGHT: set = set()
 
 @app.on_event("startup")
 def warm_hint_model():
-    """Load the hint model in the background so the first hint isn't a cold start."""
+    """Load the hint model in the background so the first hint isn't a cold start, and start
+    the loop that stores (and, when SMTP is configured, emails) each finished week's report."""
     import threading
-    threading.Thread(target=ai_hint.ollama_client.warm_up, daemon=True).start()
+    # Only when an Ollama server actually answers: without one (the normal case on a plain
+    # deployment) startup does nothing and the game, health check and everything else carry on.
+    if not os.environ.get("QUESTVERSE_NO_WARMUP") and ai_hint.ollama_client.is_running():
+        threading.Thread(target=ai_hint.ollama_client.warm_up, daemon=True).start()
+    if not os.environ.get("QUESTVERSE_NO_SCHEDULER"):
+        weekly_report.start_scheduler()
 
 
 @app.post("/hint/ai")
@@ -528,6 +565,98 @@ def use_fifty_fifty(payload: HintRequest):
         "hint": view["hint"],
         "next_question": view["question"],
     }
+
+
+# ===================================================================== accounts
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    email: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class EmailRequest(BaseModel):
+    email: Optional[str] = None
+
+
+class AchievementsRequest(BaseModel):
+    stats: dict
+    unlocked: list = []
+
+
+def _account_call(fn, *args):
+    try:
+        return fn(*args)
+    except accounts.AccountError as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from e
+    except sqlite3.Error as e:
+        log.exception("account database error")
+        raise HTTPException(status_code=503, detail="Could not reach your account. Please try again.") from e
+
+
+@app.post("/auth/register")
+def auth_register(payload: RegisterRequest):
+    user = _account_call(accounts.register, payload.username, payload.password, payload.email)
+    token, _ = _account_call(accounts.login, payload.username, payload.password)
+    return {"token": token, "user": user}
+
+
+@app.post("/auth/login")
+def auth_login(payload: LoginRequest):
+    token, user = _account_call(accounts.login, payload.username, payload.password)
+    return {"token": token, "user": user}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request):
+    _account_call(accounts.logout, bearer_token(request))
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    return {"user": request.state.user}
+
+
+@app.put("/me/email")
+def update_email(payload: EmailRequest, request: Request):
+    email = _account_call(accounts.set_email, request.state.user["id"], payload.email)
+    return {"email": email, "email_delivery": weekly_report.smtp_configured()}
+
+
+@app.get("/me/achievements")
+def get_my_achievements(request: Request):
+    return _account_call(accounts.get_achievements, request.state.user["id"])
+
+
+@app.put("/me/achievements")
+def put_my_achievements(payload: AchievementsRequest, request: Request):
+    return _account_call(accounts.save_achievements, request.state.user["id"], payload.stats, payload.unlocked)
+
+
+@app.get("/me/weekly-report")
+def my_weekly_report(request: Request, week: Optional[str] = None):
+    """The weekly progress report: the current week by default, or the week starting at `week`
+    (an ISO date from /me/weekly-report/weeks)."""
+    from datetime import datetime, timezone
+    user = request.state.user
+    try:
+        start = datetime.fromisoformat(week) if week else None
+        if start is not None and start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Unknown week") from e
+    try:
+        report = weekly_report.get_report(user["id"], start)
+        weeks = weekly_report.list_weeks(user["id"])
+    except sqlite3.Error as e:
+        log.exception("weekly report failed")
+        raise HTTPException(status_code=503, detail="Could not build your report. Please try again.") from e
+    return {"report": report, "weeks": weeks, "email": user["email"], "email_delivery": weekly_report.smtp_configured()}
 
 
 # ===================================================================== levels
@@ -773,3 +902,10 @@ def get_level_results(level_id: str, student_id: str = "", session_id: Optional[
         return build_level_results(sid, level_id, session_id)
     except sqlite3.Error as e:
         raise HTTPException(status_code=503, detail="Could not read the results. Please try again.") from e
+
+
+if __name__ == "__main__":
+    # `python main.py` for hosts that just run a command. Render and Docker use the uvicorn command instead.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8010")))

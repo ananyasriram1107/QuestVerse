@@ -1,8 +1,39 @@
+# Python
 __pycache__/
-*.pyc
-.env
-backend/__pycache__/
+*.py[cod]
+.venv/
+venv/
 backend/venv/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets and local configuration (the *.example files are the documented templates)
+.env
+.env.*
+!.env.example
+!.env.development
+*.local
+.claude/settings.local.json
+
+# Databases and generated data: never commit player data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
 backend/uploaded_courses.json
-ai/__pycache__/
-backend/questverse.db*
+backend/generated_questions.json
+
+# Logs
+*.log
+
+# Node / frontend build output
+node_modules/
+frontend/dist/
+dist/
+.vercel/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store

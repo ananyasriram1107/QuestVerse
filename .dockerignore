@@ -1,0 +1,20 @@
+# Keep the image small and free of local state (the Dockerfile copies only ai/ and backend/).
+.git
+.claude
+docs
+content
+frontend
+**/node_modules
+**/venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.log
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/.env
+**/.env.*
+!**/.env.example
+backend/scanned_test.pdf
+backend/scan_page_test.png

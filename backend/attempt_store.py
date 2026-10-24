@@ -23,6 +23,7 @@ safe to call on every start (and on a database created by an earlier version
 of this file, whose user_version is still 0).
 """
 
+import contextvars
 import json
 import os
 import re
@@ -144,11 +145,61 @@ MIGRATIONS = [
     ALTER TABLE attempts ADD COLUMN hint_wait_ms INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE attempts ADD COLUMN timing_valid INTEGER NOT NULL DEFAULT 1;
     """,
+    # v6: user accounts. A user owns one "student" per hero, with the id `u<user id>.<hero>`, so
+    # every existing per-student table is automatically per user. Passwords are stored as a
+    # salted scrypt hash and bearer tokens only as a SHA-256 of the token. Achievements and
+    # lifetime stats are recorded per user; weekly_reports keeps each finished week's summary.
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        email         TEXT,
+        password_hash TEXT NOT NULL,
+        salt          TEXT NOT NULL,
+        created_at    TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users (id),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens (user_id);
+    CREATE TABLE IF NOT EXISTS user_achievements (
+        user_id        INTEGER NOT NULL REFERENCES users (id),
+        achievement_id TEXT    NOT NULL,
+        unlocked_at    TEXT    NOT NULL,
+        PRIMARY KEY (user_id, achievement_id)
+    );
+    CREATE TABLE IF NOT EXISTS user_stats (
+        user_id    INTEGER PRIMARY KEY REFERENCES users (id),
+        stats_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS weekly_reports (
+        user_id      INTEGER NOT NULL REFERENCES users (id),
+        week_start   TEXT    NOT NULL,
+        report_json  TEXT    NOT NULL,
+        generated_at TEXT    NOT NULL,
+        emailed_at   TEXT,
+        PRIMARY KEY (user_id, week_start)
+    );
+    """,
 ]
 
 
+# Set by the login middleware (main.py) to the id of the user making the current HTTP request.
+# While set, a student id must belong to that user (`u<id>.<hero>`); anything else is treated as
+# invalid, so one user can never read or write another user's levels, XP or attempts.
+ACTIVE_USER_ID: contextvars.ContextVar = contextvars.ContextVar("questverse_active_user", default=None)
+
+
 def clean_student_id(raw: Optional[str]) -> str:
-    return raw if raw and _STUDENT_ID_RE.match(raw) else "anonymous"
+    student_id = raw if raw and _STUDENT_ID_RE.match(raw) else "anonymous"
+    user_id = ACTIVE_USER_ID.get()
+    if user_id is not None and student_id != "anonymous" and not student_id.startswith(f"u{user_id}."):
+        return "anonymous"
+    return student_id
 
 
 def _now() -> str:
@@ -163,7 +214,9 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> int:
-    """Applies pending migrations; returns the resulting schema version."""
+    """Applies pending migrations; returns the resulting schema version. Creates the database
+    file's folder if needed (e.g. a fresh persistent disk) but never deletes or resets existing data."""
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     conn = _connect()
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]

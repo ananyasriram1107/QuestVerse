@@ -1,10 +1,13 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import FrontPage from "./pages/Frontpage";
 import StageMap from "./pages/StageMap";
 import CharacterSelect from "./components/CharacterSelect";
 import PlayScreen from "./components/PlayScreen";
 import LevelResults from "./components/LevelResults";
 import ReviewResults from "./components/ReviewResults";
+import AuthScreen from "./components/AuthScreen";
+import AccountMenu from "./components/AccountMenu";
+import WeeklyReport from "./components/WeeklyReport";
 import ClickSound from "./components/ClickSound";
 import FullscreenToggle from "./components/FullscreenToggle";
 import AchievementsToggle from "./components/AchievementsToggle";
@@ -12,7 +15,8 @@ import AchievementsPage from "./components/AchievementsPage";
 import OfflineToggle from "./components/OfflineToggle";
 import ErrorBoundary from "./components/ErrorBoundary";
 import {
-  completeLevel, getFirstQuestion, getProgress, getSession, requestAiHint, startLevel, submitAnswer,
+  completeLevel, fetchMe, getFirstQuestion, getProgress, getSession, getToken, logout, requestAiHint, setCurrentUser,
+  startLevel, submitAnswer,
 } from "./api";
 import { gameReducer, initialGameState } from "./gameReducer";
 import { navigate, useRoute } from "./route";
@@ -20,7 +24,9 @@ import { computeSessionStats } from "./utils/analytics";
 import { recordCourseSession } from "./utils/progressStore";
 import { loadCharacterProgress, saveCharacterProgress } from "./utils/characterStore";
 import { loadStudentId, saveStudentId } from "./utils/studentStore";
-import { recordAnswer } from "./utils/achievementStore";
+import { recordAnswer, syncAchievementsWithServer } from "./utils/achievementStore";
+import { scoped, setStorageScope } from "./utils/storageScope";
+import { setOfflineMode } from "./utils/offlineMode";
 import { getCharacter } from "./characters";
 import "./App.css";
 
@@ -31,7 +37,7 @@ const RESUME_KEY = "questverse_active_session_v1";
 
 function readResume() {
   try {
-    return JSON.parse(sessionStorage.getItem(RESUME_KEY));
+    return JSON.parse(sessionStorage.getItem(scoped(RESUME_KEY)));
   } catch {
     return null;
   }
@@ -39,8 +45,8 @@ function readResume() {
 
 function writeResume(value) {
   try {
-    if (value) sessionStorage.setItem(RESUME_KEY, JSON.stringify(value));
-    else sessionStorage.removeItem(RESUME_KEY);
+    if (value) sessionStorage.setItem(scoped(RESUME_KEY), JSON.stringify(value));
+    else sessionStorage.removeItem(scoped(RESUME_KEY));
   } catch {
     // storage unavailable -- resume just won't work
   }
@@ -70,7 +76,11 @@ export default function App() {
   const [gameState, dispatch] = useReducer(gameReducer, initialGameState);
   const questionStartedAtRef = useRef(null);
   const [session, setSession] = useState(null); // free-play course/mode config (the pre-level flow)
-  const [student, setStudent] = useState(() => loadStudentId());
+  const [student, setStudent] = useState(null); // the chosen hero (character id); set once a user is signed in
+  // Who is playing. Nothing but the login page shows until this is set.
+  const [user, setUser] = useState(null);
+  const [authStatus, setAuthStatus] = useState(() => (getToken() ? "checking" : "out"));
+  const [authNotice, setAuthNotice] = useState(null);
   const [mapNotice, setMapNotice] = useState(null);
   const [showAchievements, setShowAchievements] = useState(false);
   // ack: the final answer's feedback popup has been dismissed, so results may show.
@@ -78,6 +88,74 @@ export default function App() {
   const progressRecordedRef = useRef(false);
   const completionHandledRef = useRef(null);
   const openingLevelRef = useRef(null);
+
+  // ---- Accounts ----
+  const signIn = useCallback((signedInUser) => {
+    setCurrentUser(signedInUser.id);
+    setStorageScope(signedInUser.id);
+    setOfflineMode(false);                // an account needs the server; the Offline toggle can switch it back on
+    setUser(signedInUser);
+    setStudent(loadStudentId());          // this user's last hero, if they have played before
+    setAuthNotice(null);
+    setAuthStatus("in");
+    syncAchievementsWithServer();
+  }, []);
+
+  // No account: Free Play runs on the in-browser engine, which needs no server at all.
+  const signInGuest = useCallback(() => {
+    setCurrentUser(null);
+    setStorageScope(null);
+    setOfflineMode(true);
+    setUser({ id: null, username: "Guest", guest: true });
+    setStudent(loadStudentId());
+    setAuthNotice(null);
+    setAuthStatus("in");
+  }, []);
+
+  // A saved login is checked once at start-up.
+  useEffect(() => {
+    if (!getToken()) return undefined;
+    let cancelled = false;
+    fetchMe()
+      .then((me) => {
+        if (cancelled) return;
+        if (me) signIn(me);
+        else setAuthStatus("out");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setAuthNotice(error.message);
+        setAuthStatus("out");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signIn]);
+
+  // The session ended (logout button, or the server said the token is no longer valid):
+  // drop everything that belonged to that user and go back to the login page.
+  useEffect(() => {
+    const onLogout = () => {
+      setCurrentUser(null);
+      setStorageScope(null);
+      progressRecordedRef.current = false;
+      dispatch({ type: "RESET_GAME" });
+      setSession(null);
+      setStudent(null);
+      setUser(null);
+      setShowAchievements(false);
+      setMapNotice(null);
+      setAuthStatus("out");
+      navigate({ name: "title" }, { replace: true });
+    };
+    window.addEventListener("questverse:logout", onLogout);
+    return () => window.removeEventListener("questverse:logout", onLogout);
+  }, []);
+
+  async function handleLogout() {
+    if (!user?.guest) await logout();
+    window.dispatchEvent(new Event("questverse:logout"));
+  }
 
   // Achievements is an overlay over the current screen (which stays mounted, so
   // the map, XP and quest state are untouched). It gets its own history entry so
@@ -101,8 +179,9 @@ export default function App() {
 
   // Free play: resume an in-progress course quest after a refresh.
   useEffect(() => {
+    if (!user) return undefined;
     const saved = readResume();
-    if (!saved?.sessionId) return;
+    if (!saved?.sessionId) return undefined;
     let cancelled = false;
     getSession(saved.sessionId, saved.identity?.characterId).then((snap) => {
       if (cancelled) return;
@@ -117,7 +196,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (gameState.currentQuestion?.id) {
@@ -145,10 +224,10 @@ export default function App() {
 
   // Screens that need a hero send you to pick one first.
   useEffect(() => {
-    if (!student && !session && ["map", "play", "results", "review"].includes(route.name)) {
+    if (user && !student && !session && ["map", "play", "results", "review"].includes(route.name)) {
       navigate({ name: "hero" }, { replace: true });
     }
-  }, [student, session, route.name]);
+  }, [user, student, session, route.name]);
 
   // Leaving the quiz screens drops the in-memory quiz; the backend still holds
   // the run, so coming back (or pressing Back/Forward) resumes it.
@@ -496,6 +575,10 @@ export default function App() {
         );
         break;
 
+      case "report":
+        content = <WeeklyReport onBack={() => navigate(student ? { name: "map" } : { name: "title" })} />;
+        break;
+
       case "free":
       case "upload":
         content = (
@@ -521,11 +604,25 @@ export default function App() {
     }
   }
 
+  if (authStatus === "checking") {
+    return <StatusScreen>Checking your login…</StatusScreen>;
+  }
+  if (!user) {
+    return (
+      <>
+        <ClickSound />
+        <WorldMotion />
+        <AuthScreen onAuthed={signIn} onGuest={signInGuest} notice={authNotice} />
+      </>
+    );
+  }
+
   return (
     <>
       <ClickSound />
       <FullscreenToggle />
       <AchievementsToggle onClick={openAchievements} />
+      <AccountMenu user={user} onReport={() => navigate({ name: "report" })} onLogout={handleLogout} />
       <OfflineToggle />
       <ErrorBoundary key={route.name}>{content}</ErrorBoundary>
       {showAchievements && <AchievementsPage onClose={closeAchievements} />}

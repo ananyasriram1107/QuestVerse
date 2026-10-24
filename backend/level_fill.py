@@ -9,7 +9,7 @@ material from the course's own existing questions, so the new questions stay on 
 course's subject.
 
 What is produced is validated and de-duplicated against every existing question, then
-saved to content/generated_questions.json. Saving matters: a level's question set is
+saved to generated_questions.json next to the database. Saving matters: a level's question set is
 fixed, so once a question was generated for it, it must come back the same after a
 restart. Failures raise LevelFillError with a message that is safe to show the player;
 the level simply does not start until the minimum is met.
@@ -23,13 +23,15 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
+import attempt_store
 from ai import ollama_client
 from levels_config import MIN_LEVEL_QUESTIONS
 import custom_upload
 
+# Saved next to the database, so on a deployment it lands on the same persistent disk.
 GENERATED_PATH = os.environ.get(
     "QUESTVERSE_GENERATED",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "content", "generated_questions.json"),
+    os.path.join(os.path.dirname(os.path.abspath(attempt_store.DB_PATH)), "generated_questions.json"),
 )
 MAX_SOURCE_CHARS = 3500
 FILL_LOCK = threading.Lock()   # one top-up at a time; the second caller re-checks after the first finishes

@@ -1,0 +1,47 @@
+# QuestVerse: frontend (nginx) + backend (FastAPI + SQLite) started together.
+#   docker compose up --build      -> app at http://localhost:8080, API at http://localhost:8010
+services:
+  backend:
+    build:
+      context: .                      # repo root: the backend imports the sibling ai/ package
+      dockerfile: backend/Dockerfile
+    image: questverse-backend
+    ports:
+      - "8010:8010"                   # host:container
+    environment:
+      PORT: "8010"
+      QUESTVERSE_ENV: production
+      # Origins the BROWSER loads the frontend from (CORS allow-list).
+      FRONTEND_URL: "http://localhost:8080,http://127.0.0.1:8080"
+      # SQLite lives on the named volume below, so it survives container recreation.
+      QUESTVERSE_DB: /data/questverse.db
+      # Optional AI hints: Ollama running on your laptop (not required; app works without it).
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+      QUESTVERSE_NO_SCHEDULER: "1"    # no weekly-report email job in the demo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - questverse-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: "http://localhost:8010"
+    image: questverse-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  questverse-data:

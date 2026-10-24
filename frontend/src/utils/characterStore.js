@@ -1,11 +1,13 @@
 // Persists each character's XP/level across sessions, so picking "Zombie"
 // again later resumes exactly where that character left off instead of
 // starting over at 0 XP.
+import { scoped } from "./storageScope";
+
 const CHARACTERS_KEY = "questverse_character_progress_v1";
 
 function readJson(key, fallback) {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(scoped(key));
     return raw ? JSON.parse(raw) : fallback;
   } catch {
     return fallback;
@@ -14,7 +16,7 @@ function readJson(key, fallback) {
 
 function writeJson(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(scoped(key), JSON.stringify(value));
   } catch {
     // localStorage unavailable (private browsing, etc.) -- fail silently
   }

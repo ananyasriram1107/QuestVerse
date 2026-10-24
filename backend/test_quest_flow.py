@@ -1170,6 +1170,239 @@ def test_guesswork_needs_five_different_questions_and_a_finished_quest():
     assert done["status"] == "ok" and done["metrics"]["attempted_questions"] == 5
 
 
+# ------------------------------------------------- accounts, per-user data, weekly reports
+
+import accounts  # noqa: E402
+import weekly_report  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+_http = TestClient(main.app)          # no `with`: startup tasks (model warm-up, scheduler) stay off
+_users = {"n": 0}
+
+
+def _new_user(email=None):
+    _users["n"] += 1
+    name, password = f"hero{_users['n']}", "correct horse 42"
+    res = _http.post("/auth/register", json={"username": name, "password": password, "email": email})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    return {"id": body["user"]["id"], "name": name, "password": password, "token": body["token"],
+            "headers": {"Authorization": f"Bearer {body['token']}"}}
+
+
+def _student(user, hero="human"):
+    return accounts.student_id_for(user["id"], hero)
+
+
+def _http_play(user, level_id, hero="human", wrong_first=0):
+    student = _student(user, hero)
+    r = _http.post(f"/levels/{level_id}/start", json={"student_id": student}, headers=user["headers"])
+    assert r.status_code == 200, r.text
+    r = r.json()
+    sid, qid, n = r["session_id"], r["id"], 0
+    while qid:
+        if n < wrong_first:
+            miss = _http.post("/answer", headers=user["headers"], json={
+                "session_id": sid, "student_id": student, "question_id": qid, "answer": wrong_answer(qid)})
+            assert miss.json()["correct"] is False
+        res = _http.post("/answer", headers=user["headers"], json={
+            "session_id": sid, "student_id": student, "question_id": qid, "answer": right_answer(qid)}).json()
+        qid = res["next_question"]["id"] if res["next_question"] else None
+        n += 1
+    done = _http.post(f"/levels/{level_id}/complete", json={"student_id": student, "session_id": sid}, headers=user["headers"])
+    assert done.status_code == 200, done.text
+    return sid
+
+
+def test_registration_validates_input_and_never_stores_the_password():
+    user = _new_user()
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    row = conn.execute("SELECT password_hash, salt FROM users WHERE username = ?", (user["name"],)).fetchone()
+    conn.close()
+    assert user["password"] not in row[0] and len(row[0]) == 64 and len(row[1]) == 32
+    again = _http.post("/auth/register", json={"username": user["name"].upper(), "password": "another pass 99"})
+    assert again.status_code == 409, "usernames are unique regardless of case"
+    for bad in ({"username": "ab", "password": "long enough pw"}, {"username": "ok_name", "password": "short"},
+                {"username": "has space", "password": "long enough pw"},
+                {"username": "good_name", "password": "long enough pw", "email": "not-an-email"}):
+        assert _http.post("/auth/register", json=bad).status_code == 400, bad
+    other = _new_user()
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    salts = {r[0] for r in conn.execute("SELECT salt FROM users WHERE id IN (?,?)", (user["id"], other["id"]))}
+    conn.close()
+    assert len(salts) == 2, "every user gets their own salt"
+
+
+def test_login_errors_are_generic_and_repeated_failures_are_throttled():
+    user = _new_user()
+    wrong = _http.post("/auth/login", json={"username": user["name"], "password": "wrong password!"})
+    unknown = _http.post("/auth/login", json={"username": "nobody_here", "password": "whatever pw"})
+    assert wrong.status_code == unknown.status_code == 401 and wrong.json() == unknown.json()
+    ok = _http.post("/auth/login", json={"username": user["name"].upper(), "password": user["password"]})
+    assert ok.status_code == 200 and ok.json()["user"]["username"] == user["name"]
+    accounts._FAILURES.clear()
+    for _ in range(accounts.MAX_FAILURES):
+        _http.post("/auth/login", json={"username": user["name"], "password": "nope nope nope"})
+    locked = _http.post("/auth/login", json={"username": user["name"], "password": user["password"]})
+    assert locked.status_code == 429, "even the right password waits out the lockout"
+    accounts._FAILURES.clear()
+
+
+def test_every_data_route_needs_a_valid_unexpired_token():
+    user = _new_user()
+    assert _http.get("/health").status_code == 200
+    assert _http.get("/progress/me", params={"student_id": _student(user)}).status_code == 401
+    assert _http.get("/progress/me", params={"student_id": _student(user)}, headers={"Authorization": "Bearer junk"}).status_code == 401
+    assert _http.get("/progress/me", params={"student_id": _student(user)}, headers=user["headers"]).status_code == 200
+    unauth = _http.get("/auth/me", headers={"Origin": "http://localhost:5173"})
+    assert unauth.status_code == 401 and unauth.headers.get("access-control-allow-origin"), "the browser must be able to read the 401"
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    conn.execute("UPDATE auth_tokens SET expires_at = '2000-01-01T00:00:00.000+00:00' WHERE user_id = ?", (user["id"],))
+    conn.commit()
+    conn.close()
+    assert _http.get("/auth/me", headers=user["headers"]).status_code == 401, "expired tokens stop working"
+    fresh = _http.post("/auth/login", json={"username": user["name"], "password": user["password"]}).json()["token"]
+    assert _http.post("/auth/logout", headers={"Authorization": f"Bearer {fresh}"}).status_code == 200
+    assert _http.get("/auth/me", headers={"Authorization": f"Bearer {fresh}"}).status_code == 401, "logout ends the session"
+
+
+def test_a_user_cannot_touch_another_users_data():
+    a, b = _new_user(), _new_user()
+    mine = _http.get("/progress/me", params={"student_id": _student(a)}, headers=a["headers"])
+    assert mine.status_code == 200
+    theirs = _http.get("/progress/me", params={"student_id": _student(b)}, headers=a["headers"])
+    assert theirs.status_code == 400, "someone else's student id is rejected"
+    bare = _http.get("/progress/me", params={"student_id": "human"}, headers=a["headers"])
+    assert bare.status_code == 400, "an id that is not the user's own is rejected too"
+    assert _http.post("/levels/grove-os/start", json={"student_id": _student(b)}, headers=a["headers"]).status_code == 400
+    sid = _http.post("/levels/grove-os/start", json={"student_id": _student(b)}, headers=b["headers"]).json()["session_id"]
+    spy = _http.get(f"/session/{sid}", params={"student_id": _student(b)}, headers=a["headers"])
+    assert spy.status_code in (400, 403, 404), "another user's session id does not open for A"
+    assert attempt_store.ACTIVE_USER_ID.get() is None, "the per-request user never leaks out of a request"
+
+
+def test_levels_and_xp_are_saved_per_user_and_per_hero():
+    a, b = _new_user(), _new_user()
+    _http_play(a, "grove-os", hero="human")
+    prog = lambda user, hero: _http.get("/progress/me", params={"student_id": _student(user, hero)}, headers=user["headers"]).json()
+    assert prog(a, "human")["totals"]["levels_completed"] == 1 and prog(a, "human")["total_xp"] > 0
+    assert prog(a, "robot")["totals"]["levels_completed"] == 0, "another hero of the same user starts fresh"
+    assert prog(b, "human")["totals"]["levels_completed"] == 0, "another user's same-named hero starts fresh"
+    relog = _http.post("/auth/login", json={"username": a["name"], "password": a["password"]}).json()
+    again = _http.get("/progress/me", params={"student_id": _student(a)}, headers={"Authorization": f"Bearer {relog['token']}"})
+    assert again.json()["totals"]["levels_completed"] == 1, "progress survives logging out and back in"
+
+
+def test_achievements_are_recorded_per_user_and_only_move_forward():
+    a, b = _new_user(), _new_user()
+    stats = {"totalAnswered": 12, "totalMcqAnswered": 9, "totalShortAnswered": 3, "totalCorrect": 8, "longestStreakEver": 5}
+    saved = _http.put("/me/achievements", headers=a["headers"], json={"stats": stats, "unlocked": ["mcq_3", "streak_5"]})
+    assert saved.status_code == 200 and {u["id"] for u in saved.json()["unlocked"]} == {"mcq_3", "streak_5"}
+    lower = _http.put("/me/achievements", headers=a["headers"], json={"stats": {**stats, "totalAnswered": 1}, "unlocked": []})
+    got = lower.json()
+    assert got["stats"]["totalAnswered"] == 12 and len(got["unlocked"]) == 2, "stats never go down, unlocks are never removed"
+    first_time = {u["id"]: u["unlocked_at"] for u in got["unlocked"]}
+    again = _http.put("/me/achievements", headers=a["headers"], json={"stats": stats, "unlocked": ["mcq_3"]}).json()
+    assert {u["id"]: u["unlocked_at"] for u in again["unlocked"]} == first_time, "first unlock time is kept"
+    assert _http.get("/me/achievements", headers=b["headers"]).json()["unlocked"] == [], "other users are unaffected"
+    for bad in ({"stats": {**stats, "totalAnswered": -1}, "unlocked": []},
+                {"stats": {**stats, "totalAnswered": 10 ** 9}, "unlocked": []},
+                {"stats": stats, "unlocked": ["Not Valid!"]}, {"stats": {"totalAnswered": "lots"}, "unlocked": []}):
+        assert _http.put("/me/achievements", headers=a["headers"], json=bad).status_code == 400, bad
+
+
+def test_weekly_report_summarises_this_weeks_recorded_play():
+    user = _new_user()
+    _http.put("/me/achievements", headers=user["headers"], json={
+        "stats": {"totalAnswered": 5, "totalMcqAnswered": 3, "totalShortAnswered": 2, "totalCorrect": 5, "longestStreakEver": 3},
+        "unlocked": ["mcq_3"]})
+    _http_play(user, "grove-os", wrong_first=2)
+    res = _http.get("/me/weekly-report", headers=user["headers"])
+    assert res.status_code == 200
+    rep = res.json()["report"]
+    assert rep["in_progress"] is True and rep["questions_answered"] == 5
+    assert rep["first_try_accuracy_pct"] == 60.0 and rep["attempts"] == 7       # 2 misses, 5 solves
+    assert rep["xp_earned"] > 0 and [lv["level_id"] for lv in rep["levels_completed"]] == ["grove-os"]
+    assert rep["heroes"]["human"]["questions"] == 5 and rep["topics"]["os"]["first_try_accuracy_pct"] == 60.0
+    assert [a["id"] for a in rep["achievements_unlocked"]] == ["mcq_3"] and rep["days_active"] == 1
+    assert rep["guessing_pattern"]["status"] == "ok" and rep["highlights"]
+    assert "60%" in rep["highlights"][0] and res.json()["weeks"][0] == rep["week_start"]
+    other = _new_user()
+    assert _http.get("/me/weekly-report", headers=other["headers"]).json()["report"]["questions_answered"] == 0
+
+
+def _insert_attempts(user_id, when, rows):
+    conn = sqlite3.connect(attempt_store.DB_PATH)
+    for i, (qid, ok, no) in enumerate(rows):
+        conn.execute(
+            "INSERT INTO attempts (student_id, session_id, question_id, topic, selected_answer, is_correct, attempt_no, "
+            "response_time_ms, submitted_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (accounts.student_id_for(user_id, "human"), f"old-{user_id}-{when.date()}", qid, "os", "x", int(ok), no, 5000,
+             (when + timedelta(seconds=i)).isoformat(timespec="milliseconds")))
+    conn.commit()
+    conn.close()
+
+
+def test_finished_weeks_are_stored_once_and_compare_with_the_week_before():
+    user = _new_user(email="player@example.com")
+    this_monday = weekly_report.week_start_of(datetime.now(timezone.utc))
+    last = this_monday - timedelta(days=7)
+    before = last - timedelta(days=7)
+    _insert_attempts(user["id"], before + timedelta(hours=10), [(f"os-mcq-{i}", i <= 2, 1) for i in range(1, 5)])      # 50%
+    _insert_attempts(user["id"], last + timedelta(hours=10), [(f"os-mcq-{i}", i < 4, 1) for i in range(1, 5)])        # 75%
+    rep = weekly_report.get_report(user["id"], last)
+    assert rep["in_progress"] is False and rep["first_try_accuracy_pct"] == 75.0
+    assert rep["previous_week_accuracy_pct"] == 50.0 and rep["accuracy_change_pts"] == 25.0
+    _insert_attempts(user["id"], last + timedelta(hours=11), [("os-mcq-9", False, 1)])
+    assert weekly_report.get_report(user["id"], last)["questions_answered"] == 4, "a finished week is stored, not recomputed"
+    assert weekly_report.get_report(user["id"], last)["highlights"][0].count("75%") == 1
+    stored = _http.get("/me/weekly-report", params={"week": last.isoformat()}, headers=user["headers"]).json()
+    assert stored["report"]["first_try_accuracy_pct"] == 75.0 and last.isoformat(timespec="milliseconds") in stored["weeks"]
+    assert _http.get("/me/weekly-report", params={"week": "garbage"}, headers=user["headers"]).status_code == 400
+
+
+def test_weekly_job_emails_each_report_once_and_only_when_delivery_is_configured():
+    user = _new_user(email="weekly@example.com")
+    last = weekly_report.week_start_of(datetime.now(timezone.utc)) - timedelta(days=7)
+    _insert_attempts(user["id"], last + timedelta(hours=9), [(f"os-mcq-{i}", True, 1) for i in range(1, 4)])
+    sent = []
+    real_send, real_conf = weekly_report.send_email, weekly_report.smtp_configured
+    try:
+        assert weekly_report.smtp_configured() is False and weekly_report.send_email(
+            {"email": "weekly@example.com", "username": "x", "id": 1}, {"highlights": [], "topics": {}, "guessing_pattern": {}}) is False
+        weekly_report.send_email = lambda u, r: (sent.append((u["email"], r["questions_answered"])), True)[1]
+        assert weekly_report.run_weekly_job() >= 1
+        assert ("weekly@example.com", 3) in sent
+        assert weekly_report.run_weekly_job() == 0, "an emailed report is never sent twice"
+        conn = sqlite3.connect(attempt_store.DB_PATH)
+        assert conn.execute("SELECT emailed_at FROM weekly_reports WHERE user_id = ?", (user["id"],)).fetchone()[0]
+        conn.close()
+    finally:
+        weekly_report.send_email, weekly_report.smtp_configured = real_send, real_conf
+    text = weekly_report.render_text("hero", weekly_report.get_report(user["id"], last))
+    assert "hero" in text and "100%" in text
+
+
+def test_email_can_be_set_changed_and_cleared():
+    user = _new_user()
+    assert _http.put("/me/email", json={"email": "me@example.com"}, headers=user["headers"]).json()["email"] == "me@example.com"
+    assert _http.get("/auth/me", headers=user["headers"]).json()["user"]["email"] == "me@example.com"
+    assert _http.put("/me/email", json={"email": "nope"}, headers=user["headers"]).status_code == 400
+    assert _http.put("/me/email", json={"email": ""}, headers=user["headers"]).json()["email"] is None
+
+
+def test_student_ids_are_scoped_to_the_logged_in_user():
+    token = attempt_store.ACTIVE_USER_ID.set(5)
+    try:
+        assert attempt_store.clean_student_id("u5.human") == "u5.human"
+        assert attempt_store.clean_student_id("u55.human") == "anonymous", "u5 must not match u55"
+        assert attempt_store.clean_student_id("u6.human") == "anonymous" and attempt_store.clean_student_id("human") == "anonymous"
+    finally:
+        attempt_store.ACTIVE_USER_ID.reset(token)
+    assert attempt_store.clean_student_id("human") == "human", "no user in effect: unchanged behaviour"
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
